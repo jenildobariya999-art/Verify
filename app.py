@@ -34,8 +34,8 @@ def norm_name(name):
 
 
 def _exists(bid, name, exclude=None):
-    k = core.nk(name)
-    return any(core.nk(r["name"]) == k for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
+    k = core.nkc(name)
+    return any(core.nkc(r["name"]) == k for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
                if r["id"] != exclude)
 
 
@@ -43,6 +43,13 @@ def bot_view(b):
     n = core.one("SELECT COUNT(*) c FROM users WHERE bot_id=?", (b["id"],))["c"]
     return {"id": b["id"], "name": b["name"], "username": b["username"],
             "running": core.is_running(b["id"]), "users": n, "token_hint": b["token"][-4:]}
+
+
+@app.before_request
+def remember_public_url():
+    if not os.environ.get("PUBLIC_URL") and request.path in ("/", "/login"):
+        proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+        core.set_setting("base_url", f"{proto}://{request.host}")
 
 
 @app.get("/")
@@ -169,20 +176,22 @@ def del_command(cid):
 @app.post("/api/commands/<int:cid>/test")
 @auth
 def test_command(cid):
-    """Dry run: executes the code but sends nothing to Telegram and saves nothing."""
+    """Dry run: nothing is sent to Telegram and nothing is saved."""
     cmd = core.one("SELECT * FROM commands WHERE id=?", (cid,))
     bot = core.one("SELECT * FROM bots WHERE id=?", (cmd["bot_id"],))
     code = request.json.get("code", cmd["code"])
     text = request.json.get("text") or cmd["name"]
-    user = {"id": 0, "first_name": "Tester", "username": "tester"}
-    chat = {"id": 0, "type": "private"}
+    user = {"id": int(request.json.get("user_id") or 0), "first_name": "Tester", "username": "tester"}
+    chat = {"id": user["id"], "type": "private"}
     msg = {"message_id": 1, "from": user, "chat": chat, "text": text}
-    data = text if cmd["name"].startswith("cb:") else None
     words, n = text.split(), len(cmd["name"].split())
     args = words[n:] if core.nk(" ".join(words[:n])) == core.nk(cmd["name"]) else words
-    ctx = core.build_ctx(user, chat, msg, text, args, data, "test")
-    res = core.execute(bot, code, ctx)
-    return jsonify(res)
+    is_cb = cmd["name"].startswith("cb:")
+    if is_cb:
+        msg = {"id": "test", "from": user, "data": text, "message": msg, "chat": chat, "message_id": 1}
+    ctx = core.make_ctx("callback_query" if is_cb else "message", msg, user, chat, text, args,
+                        text if is_cb else None, "test", 1)
+    return jsonify(core.execute(bot, {"name": cmd["name"], "code": code}, ctx, dry=True))
 
 
 @app.get("/api/bots/<int:bid>/logs")
@@ -409,7 +418,7 @@ def import_cmds(bid):
         if not name:
             continue
         hit = next((r for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
-                    if core.nk(r["name"]) == core.nk(name)), None)
+                    if core.nkc(r["name"]) == core.nkc(name)), None)
         if hit:
             core.run("UPDATE commands SET code=? WHERE id=?", (c.get("code", ""), hit["id"]))
             updated += 1
@@ -600,6 +609,168 @@ def export_users(bid):
         "Content-Disposition": f'attachment; filename="{_bot(bid)["username"]}_users.{fmt}"'})
 
 
+# ---------- backups (More menu) ----------
+def _bot_snapshot(b, with_data=True, with_token=True):
+    bid = b["id"]
+    snap = {"name": b["name"], "username": b["username"], "version": b.get("version") or "1.0.0",
+            "was_running": bool(b["running"]),
+            "commands": [{"name": c["name"], "code": c["code"], "folder": c["folder"]} for c in
+                         core.rows("SELECT name, code, folder FROM commands WHERE bot_id=? ORDER BY name", (bid,))],
+            "folders": [r["name"] for r in core.rows("SELECT name FROM folders WHERE bot_id=?", (bid,))],
+            "env": core.rows("SELECT k, v, raw FROM env WHERE bot_id=?", (bid,)),
+            "miniapp": (core.one("SELECT html FROM miniapps WHERE bot_id=?", (bid,)) or {}).get("html")}
+    if with_token:
+        snap["token"] = b["token"]
+    if with_data:
+        snap["bot_data"] = core.kv_all(bid, "bot")
+        snap["user_data"] = {}
+        for r in core.rows("SELECT DISTINCT scope FROM kv WHERE bot_id=? AND scope LIKE 'user:%'", (bid,)):
+            snap["user_data"][r["scope"][5:]] = core.kv_all(bid, r["scope"])
+        snap["users"] = core.rows("SELECT user_id, first_name, username, first_seen, last_seen, blocked "
+                                  "FROM users WHERE bot_id=?", (bid,))
+    return snap
+
+
+def _download(body, name, mime="application/octet-stream"):
+    return app.response_class(body, mimetype=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/backup/all")
+@auth
+def backup_all():
+    with_data = request.args.get("data", "1") == "1"
+    snaps = [_bot_snapshot(b, with_data, True) for b in core.rows("SELECT * FROM bots ORDER BY id")]
+    doc = {"botbench_backup": 1, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "includes_data": with_data, "bots": snaps}
+    return _download(json.dumps(doc, indent=1, ensure_ascii=False, default=str),
+                     f"botbench_backup_{time.strftime('%Y%m%d_%H%M')}{'' if with_data else '_commands_only'}.json", "application/json")
+
+
+@app.get("/api/backup/users")
+@auth
+def backup_users():
+    fmt = "csv" if request.args.get("format") == "csv" else "json"
+    data = core.rows("SELECT b.username bot, u.user_id, u.first_name, u.username, u.first_seen, u.last_seen, "
+                     "COALESCE(u.blocked,0) blocked FROM users u JOIN bots b ON b.id=u.bot_id ORDER BY b.id, u.first_seen")
+    if fmt == "csv":
+        import csv, io
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=["bot", "user_id", "first_name", "username", "first_seen", "last_seen", "blocked"])
+        w.writeheader()
+        w.writerows(data)
+        return _download(buf.getvalue(), "all_bots_users.csv", "text/csv")
+    return _download(json.dumps(data, indent=1, ensure_ascii=False), "all_bots_users.json", "application/json")
+
+
+@app.get("/api/backup/commands.zip")
+@auth
+def backup_commands_zip():
+    import zipfile, io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for b in core.rows("SELECT * FROM bots ORDER BY id"):
+            seen = set()
+            for c in core.rows("SELECT name, code FROM commands WHERE bot_id=?", (b["id"],)):
+                base = re.sub(r"[^\w\-]+", "_", c["name"]).strip("_") or "command"
+                fn, i = base, 1
+                while fn.lower() in seen:
+                    i += 1
+                    fn = f"{base}_{i}"
+                seen.add(fn.lower())
+                z.writestr(f"{b['username']}/{fn}.py", f"# command: {c['name']}\n{c['code']}")
+    return _download(buf.getvalue(), "all_commands_py.zip", "application/zip")
+
+
+@app.get("/api/backup/db")
+@auth
+def backup_db():
+    import sqlite3, tempfile
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+    tmp.close()
+    with core._lock:
+        dst = sqlite3.connect(tmp.name)
+        core._db.backup(dst)
+        dst.close()
+    body = open(tmp.name, "rb").read()
+    os.unlink(tmp.name)
+    return _download(body, f"botbench_{time.strftime('%Y%m%d_%H%M')}.db")
+
+
+@app.post("/api/restore")
+@auth
+def restore():
+    try:
+        doc = json.loads(request.json.get("content") or "")
+        bots = doc["bots"]
+    except Exception:
+        return jsonify(error="That isn't a Botbench backup file."), 400
+    made = updated = skipped = 0
+    for s in bots:
+        row = None
+        if s.get("token"):
+            row = core.one("SELECT * FROM bots WHERE token=?", (s["token"],))
+        if not row and s.get("username"):
+            row = core.one("SELECT * FROM bots WHERE username=?", (s["username"],))
+        if not row:
+            if not s.get("token"):
+                skipped += 1
+                continue
+            bid = core.run("INSERT INTO bots(name, username, token, version) VALUES(?,?,?,?)",
+                           (s.get("name"), s.get("username"), s["token"], s.get("version") or "1.0.0"))
+            made += 1
+        else:
+            bid = row["id"]
+            updated += 1
+        core.run("DELETE FROM commands WHERE bot_id=?", (bid,))
+        for c in s.get("commands", []):
+            core.run("INSERT OR REPLACE INTO commands(bot_id, name, code, folder) VALUES(?,?,?,?)",
+                     (bid, c["name"], c.get("code", ""), c.get("folder")))
+        for f in s.get("folders", []):
+            core.run("INSERT OR IGNORE INTO folders(bot_id, name) VALUES(?,?)", (bid, f))
+        core.run("DELETE FROM env WHERE bot_id=?", (bid,))
+        for e in s.get("env", []):
+            core.run("INSERT OR REPLACE INTO env(bot_id,k,v,raw) VALUES(?,?,?,?)", (bid, e["k"], e["v"], e.get("raw", 0)))
+        if s.get("miniapp"):
+            core.run("INSERT OR REPLACE INTO miniapps(bot_id, html) VALUES(?,?)", (bid, s["miniapp"]))
+        core.kv_apply(bid, "bot", s.get("bot_data"))
+        for uid, d in (s.get("user_data") or {}).items():
+            core.kv_apply(bid, f"user:{uid}", d)
+        for u in s.get("users", []):
+            core.run("INSERT OR REPLACE INTO users(bot_id,user_id,first_name,username,first_seen,last_seen,blocked) "
+                     "VALUES(?,?,?,?,?,?,?)", (bid, u["user_id"], u.get("first_name"), u.get("username"),
+                                               u.get("first_seen"), u.get("last_seen"), u.get("blocked") or 0))
+        core.invalidate(bid)
+        if s.get("was_running"):
+            core.start_bot(bid)
+    return jsonify(created=made, updated=updated, skipped=skipped)
+
+
+@app.post("/api/restart_all")
+@auth
+def restart_all():
+    ids = [b["id"] for b in core.rows("SELECT id FROM bots") if core.is_running(b["id"])]
+    for i in ids:
+        core.stop_bot(i)
+    time.sleep(0.3)
+    for i in ids:
+        core.start_bot(i)
+    return jsonify(restarted=len(ids))
+
+
+_STARTED = time.time()
+
+
+@app.get("/api/system")
+@auth
+def system():
+    import sys, platform
+    bots = core.rows("SELECT id FROM bots")
+    return jsonify(python=sys.version.split()[0], platform=platform.system(), uptime=int(time.time() - _STARTED),
+                   bots=len(bots), running=sum(core.is_running(b["id"]) for b in bots), workers=core.WORKERS,
+                   timeout=core.EXEC_TIMEOUT, db_mb=round(os.path.getsize(core.DB_PATH) / 1e6, 2),
+                   public_url=core.base_url(),
+                   scheduled=core.one("SELECT COUNT(*) c FROM scheduled")["c"])
+
+
 # ---------- mini app ----------
 MINI_DEFAULT = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -636,6 +807,22 @@ def mini_menu(bid):
     except Exception as e:
         return jsonify(error=f"Telegram refused: {e}"), 400
     return jsonify(ok=True, url=url)
+
+
+@app.route("/hook/<int:bid>", methods=["GET", "POST"])
+def webhook(bid):
+    """Target of libs.Webhook.getUrlFor(): runs a command with the request body as options.json."""
+    import hmac as _h
+    c, u, s = request.args.get("c", ""), request.args.get("u", ""), request.args.get("s", "")
+    want = _h.new(core.secret().encode(), f"{bid}|{c}|{u}".encode(), "sha256").hexdigest()[:24]
+    bot = _bot(bid)
+    if not bot or not _h.compare_digest(s, want) or not u.lstrip("-").isdigit():
+        return jsonify(error="bad signature"), 403
+    body = request.get_json(silent=True)
+    if body is None:
+        body = dict(request.form) or dict(request.args)
+    core.fire_hook(bot, c, int(u), {"json": body, "params": dict(request.args), "method": request.method})
+    return jsonify(ok=True)
 
 
 @app.get("/m/<int:bid>")

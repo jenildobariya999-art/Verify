@@ -20,7 +20,7 @@ header>div{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:14p
 header h1{margin:0;font-size:19px;font-weight:650;flex:1}
 header .bell{color:#a78bfa;background:none;border:0;padding:6px}
 nav{position:fixed;bottom:0;left:0;right:0;z-index:20;background:#0a0a0af2;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
-nav>div{max-width:680px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr)}
+nav>div{max-width:680px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr)}
 nav button{background:none;border:0;color:#d4d4d8;padding:8px 0 6px;display:grid;justify-items:center;gap:3px;font-size:12px;cursor:pointer}
 nav button svg{width:24px;height:24px}
 nav button.on{color:#a78bfa}
@@ -152,6 +152,11 @@ h2.page{margin:6px 0 16px;font-size:21px}
 .erow input[type=text],.rawta{background:var(--card2);border:0;border-radius:10px;padding:10px;font:13.5px var(--mono);min-width:0;outline:0;color:var(--ink)}
 .rawta{width:100%;min-height:140px;display:block;margin-bottom:8px}.erow label{font-size:13px;color:var(--mut);display:flex;gap:5px;align-items:center}
 .minitext{width:100%;min-height:300px;background:#000;border:1px solid var(--line);border-radius:12px;padding:12px;font:13px/1.55 var(--mono);color:#dde6f7;outline:0;margin-bottom:10px;resize:vertical}
+.card.danger{border-color:#4a1d20}.card.doc h3{margin:0 0 8px;font-size:17px}.card.doc h4{margin:16px 0 6px;font-size:14.5px;color:#c4b5fd}
+.doc p,.doc li,.doc td{font-size:14.5px;color:#d4d4d8;line-height:1.55}.doc ul,.doc ol{padding-left:20px;margin:8px 0}.doc code{background:#1e1e24;padding:1px 6px;border-radius:5px;font:13px var(--mono);color:#c4b5fd}
+.doc pre{background:#000;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0 0;overflow-x:auto;font:13px/1.55 var(--mono);color:#dde6f7;white-space:pre}.doc pre code{background:none;padding:0;color:inherit}
+.prebar{display:flex;gap:14px;flex-wrap:wrap;margin:2px 0 10px}.doc table{border-collapse:collapse;width:100%}.doc td{padding:7px 8px 7px 0;border-top:1px solid var(--line);vertical-align:top}.doc td:first-child{white-space:nowrap}
+a.lr{color:var(--ink);text-decoration:none}
 @media(max-width:480px){.erow{grid-template-columns:1fr 1fr}.snip{max-width:48vw}}
 @media(min-width:900px){
   :root{--pad:34px}
@@ -189,8 +194,8 @@ const ago=t=>{if(!t)return"never";const s=Date.now()/1e3-t;return s<90?"just now
 
 function frame(inner){
   $("#app").innerHTML=`<header><div><div class="logo">${I.logo}</div><h1>Botbench</h1><button class="bell" aria-label="Notifications">${I.bell}</button></div></header><div id="view">${inner}</div>
-  <nav><div>${[["home","Home"],["bots","Bots"],["ai","AI"],["earn","Earn"],["more","More"]].map(([k,l])=>`<button data-p="${k}" class="${S.page==k?"on":""}">${I[k]}<span>${l}</span></button>`).join("")}</div></nav>`;
-  document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{S.page=b.dataset.p;if(S.page=="bots"&&!S.bot)S.cur=null;render()});
+  <nav><div>${[["home","Home"],["bots","Bots"],["ai","AI"],["more","More"]].map(([k,l])=>`<button data-p="${k}" class="${S.page==k?"on":""}">${I[k]}<span>${l}</span></button>`).join("")}</div></nav>`;
+  document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{S.page=b.dataset.p;S.more="menu";if(S.page=="bots"&&!S.bot)S.cur=null;render()});
 }
 async function loadBots(){S.bots=await api("/api/bots");if(S.bot)S.bot=S.bots.find(b=>b.id==S.bot.id)||null;render()}
 async function loadCmds(){S.cmds=await api(`/api/bots/${S.bot.id}/commands`);render()}
@@ -198,14 +203,12 @@ function openBot(b){S.bot=b;S.tab="intro";S.folder=null;S.sel=new Set();S.selMod
 async function addBot(){const t=await ask("Add a bot","Create a bot with @BotFather on Telegram, then paste its token here.","123456:ABC-DEF…","Add bot");if(!t)return;
   try{const b=await api("/api/bots","POST",{token:t});S.bots=await api("/api/bots");openBot(S.bots.find(x=>x.id==b.id))}catch(e){toast(e.message)}}
 
-function render(){({home:vHome,bots:vBots,ai:vAI,earn:vEarn,more:vMore}[S.page])()}
+function render(){({home:vHome,bots:vBots,ai:vAI,more:vMore}[S.page])()}
 function vHome(){const run=S.bots.filter(b=>b.running).length,u=S.bots.reduce((a,b)=>a+b.users,0);
   frame(`<h2 class="page">Home</h2><div class="stats"><div><small>Bots</small><b>${S.bots.length}</b></div><div><small>Running</small><b class="g">${run}</b></div><div><small>Total users</small><b>${u}</b></div><div><small>Stopped</small><b class="o">${S.bots.length-run}</b></div></div>
   ${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users</small></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Open the Bots tab to add one.</div>'}`);
   document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)))}
 function vAI(){frame(`<h2 class="page">AI</h2><div class="card"><h4>AI assistant</h4><p>Describe a command in plain words and get Python code for it. This needs an AI provider key, which isn't connected to this panel yet.</p><div class="field"><input disabled placeholder="e.g. a /balance command that reads user data"></div></div>`)}
-function vEarn(){frame(`<h2 class="page">Earn</h2><div class="card"><h4>Earnings</h4><p>Monetization isn't part of this self-hosted panel, so there is nothing to earn or withdraw here.</p></div>`)}
-function vMore(){frame(`<h2 class="page">More</h2><button class="list-item" id="mAdd">${I.plus}<span class="grow"><b>Add a bot</b><small>Paste a token from @BotFather</small></span></button><a class="list-item" href="/logout" style="text-decoration:none;color:inherit">${I.arrow}<span class="grow"><b>Sign out</b></span></a>`);$("#mAdd").onclick=addBot}
 function vBots(){clearInterval(S.tick);
   if(!S.bot){frame(`<div class="row" style="margin-bottom:14px"><h2 class="page grow" style="margin:0">Your bots</h2><button class="btn sm" id="ab">${I.plus} Add bot</button></div>${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users</small></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Add the token of a bot you made with @BotFather.</div>'}`);
     $("#ab").onclick=addBot;document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)));return}
@@ -283,6 +286,131 @@ async function tSearch(){const B=$("#body"),id=S.bot.id;if(!S.cmds.length)S.cmds
     if(!confirm(`${$("#rp").value?`Replace with "${$("#rp").value}"`:"Delete the matched text"} in ${n} place(s) across ${last.length} command(s)? This can't be undone.`))return;
     try{const r=await api(`/api/bots/${id}/replace`,"POST",{q,replace:$("#rp").value,...O});toast(`${r.replaced} replaced in ${r.commands} command(s)`);S.cmds=await api(`/api/bots/${id}/commands`);S.cmds.forEach(c=>{c.draft=undefined;c.h=undefined});go()}catch(e){toast(e.message)}}}
 
+/* ---------- Docs ---------- */
+const DOCS=[
+{id:"start",t:"Quick start",h:`<p>A bot is a set of <b>commands</b>. Each command is a small Python script that runs when a user sends matching text or presses a button.</p><ol><li>More → <b>Add a bot</b> and paste the token from @BotFather. It starts by itself.</li><li>Bots → your bot → <b>Commands</b> → <b>+</b>. Name it <code>hii</code> (no slash needed) and write:</li></ol><pre data-name="hii">bot.send(f"Hello {user.first_name}!")</pre><p>Message your bot "hii" (or "/hii"). Use <b>Run test</b> (the wand icon in the editor) to try code without sending anything.</p>`},
+{id:"match",t:"How commands match",h:`<ul><li>The slash is optional: <code>hii</code>, <code>/hii</code> and <code>Hii</code> all run the command named <code>hii</code>. If you have both <code>/BROADCAST</code> and <code>/broadcast</code>, the exact spelling wins.</li><li>Names can have spaces or emoji, like <code>Link Wallet</code> or <code>🚀 Withdraw</code>. That is how reply-keyboard buttons work.</li><li>Extra words become <code>params</code> (text) and <code>args</code> (list): "/start 123" gives <code>params == "123"</code>. With nothing extra, <code>params == "None"</code>.</li><li><code>*</code> runs when nothing matches. <code>cb:data</code> runs for a button whose data is <code>data</code>. A button with data <code>/Menu page2</code> runs <code>/Menu</code> with <code>params == "page2"</code>.</li></ul><h4>Special commands</h4><ul><li><code>@</code> runs <b>before</b> every command. <code>raise ReturnCommand</code> inside it stops the command (use it for bans and force-join).</li><li><code>~</code> is code added on top of every command (shared constants).</li><li><code>!</code> runs when a command crashes; <code>options</code> holds the error text.</li><li><code>/handler_special_updates</code> (or <code>/handler_my_chat_member</code>, <code>/handler_chat_join_request</code> …) receives non-message updates; <code>update_type</code> tells you which.</li></ul>`},
+{id:"scope",t:"What's available in your code",h:`<table><tr><td><code>u</code></td><td>the user's Telegram ID</td></tr><tr><td><code>message</code></td><td>the Telegram message (<code>message.text</code>, <code>message.chat.id</code>, <code>message.from_user.first_name</code>, <code>message.photo[-1].file_id</code>). For buttons it is the callback (<code>message.data</code>, <code>message.message</code>)</td></tr><tr><td><code>call</code></td><td>same as <code>message</code>; handy in button commands: <code>call.message.message_id</code></td></tr><tr><td><code>msg</code> / <code>text</code></td><td>the text the user sent</td></tr><tr><td><code>params</code>, <code>args</code></td><td>what came after the command</td></tr><tr><td><code>options</code></td><td>value passed by <code>runCommand</code>, <code>handleNextCommand</code>, a webhook or a schedule</td></tr><tr><td><code>user</code>, <code>bot</code>, <code>Bot</code>, <code>User</code></td><td>see the next sections</td></tr><tr><td><code>update_type</code>, <code>bot_id</code>, <code>bot_token</code></td><td>what kind of update, and the bot's ID and token</td></tr></table><p>Environment variables from <b>Manage</b> are also globals. Normal Python works: <code>import</code> anything installed, <code>requests</code>, <code>re</code>, <code>json</code>, <code>time</code> are ready.</p>`},
+{id:"send",t:"Sending messages",h:`<p>Two styles work, use whichever you like (they can be mixed):</p><pre data-name="menu">bot.send("Pick one", inline=[[("Yes", "yes"), ("Docs", "https://example.com")]])
+bot.send("Menu", keyboard=[["Help", "About"], ["Balance"]])
+bot.reply("Got it")                         # replies to their message
+bot.photo("https://…/a.jpg", caption="Hi")
+bot.edit("New text")                         # edit the message a button was on
+bot.answer("Saved", alert=False)             # answer a button press</pre><pre data-name="telebot-style">sent = bot.sendMessage("Hello <b>bold</b>", parse_mode="HTML")
+bot.editMessageText(chat_id=u, message_id=sent.message_id, text="Edited")
+bot.replyText(u, "Sent to user u")
+bot.sendPhoto(photo="file_id_or_url", caption="Look")
+bot.copyMessage(chat_id=u, from_chat_id=message.chat.id, message_id=message.message_id)
+bot.deleteMessage(u, message.message_id)
+member = bot.getChatMember(chat_id="@mychannel", user_id=u)   # member.status</pre><p>Every Telegram Bot API method works as <code>bot.methodName(...)</code> (camelCase or snake_case) and <b>returns the result</b>, so <code>sent.message_id</code> works. Errors raise an exception; wrap in <code>try/except</code> when a failure is fine.</p><h4>Buttons the telebot way</h4><pre data-name="telebot-buttons">m = InlineKeyboardMarkup()
+m.add(InlineKeyboardButton("Join", url="https://t.me/x"), InlineKeyboardButton("Done", callback_data="/Check"))
+m.row(InlineKeyboardButton("Back", callback_data="/start"))
+bot.sendMessage("Join first", reply_markup=m)</pre><p><code>InlineKeyboardMarkup</code>, <code>InlineKeyboardButton</code>, <code>ReplyKeyboardMarkup</code>, <code>KeyboardButton</code>, <code>ReplyKeyboardRemove</code>, <code>ForceReply</code> and <code>LinkPreviewOptions</code> are built in. Plain dicts also work: <code>{"inline_keyboard": [[{"text": "Hi", "callback_data": "x"}]]}</code>.</p>`},
+{id:"data",t:"Saving data",h:`<pre data-name="data-demo">User.saveData("score", 10)        # about the current user
+User.getData("score")             # None if missing
+User.getData("score", user=12345) # another user
+Bot.saveData("total", 5)          # shared by the whole bot
+Bot.getData("total")
+Bot.deleteData("total")
+
+user.save("name", "Ann"); user.get("name", "")   # same thing, shorter
+bot.save("flag", True);   bot.get("flag", False)
+
+libs.Resources.anotherRes("Balance", user=u).add(10)    # counters
+libs.Resources.anotherRes("Balance", user=u).cut(3)
+libs.Resources.anotherRes("Balance", user=u).value()
+libs.Resources.globalRes("TotalPaid").add(10)</pre><p>Values can be numbers, text, lists, dicts, true/false. You can view and edit everything in <b>Admin → Bot Data / User Data</b>. Data is saved immediately, even if the command later fails.</p>`},
+{id:"flow",t:"Conversations and timing",h:`<pre data-name="ask-name">bot.send("What's your name?")
+Bot.handleNextCommand("/got_name")          # their next message runs /got_name</pre><pre data-name="got_name">name = msg                                   # what they typed
+User.saveData("name", name)
+bot.send(f"Nice to meet you, {name}!")</pre><pre data-name="flow-helpers">Bot.runCommand("/Menu")                      # run another command now
+Bot.handleNextCommand("/step2", options={"from": "step1"})   # arrives as options
+job = Bot.runCommandAfter(3600, "/reminder", options="x")    # run in an hour
+Bot.cancelScheduledTask(job["id"])
+raise ReturnCommand                          # stop this command (never use a bare return)</pre><p>Scheduled tasks run only while the bot is running and survive restarts.</p>`},
+{id:"hook",t:"Webhooks and broadcasts",h:`<pre data-name="webhook">url = libs.Webhook.getUrlFor("/PaymentDone", u)    # a signed link to this panel
+# when anything calls that URL (GET or POST), /PaymentDone runs for user u
+# and options.json holds the JSON body or query values</pre><pre data-name="broadcast">task = Bot.broadcast(function="sendMessage", text="<b>Hello!</b>", parse_mode="HTML",
+                     callback_url=libs.Webhook.getUrlFor("/BroadcastDone", u))
+# sends to every user who hasn't blocked the bot (about 20 per second); when it
+# finishes, /BroadcastDone runs with options.json = {"total", "total_success", "total_errors"}</pre><p>Webhook links need a public address. On Render it is detected automatically; elsewhere set <code>PUBLIC_URL</code>. For simple announcements use <b>Admin → Broadcasts</b>.</p>`},
+{id:"libs",t:"Built-in helpers",h:`<pre data-name="helpers">libs.DateAndTime.now("Asia/Kolkata")["date"]   # "2026-11-23", also ["time"] "14:05:09"
+libs.Random.randomInt(1, 100)
+libs.Random.randomStr(8)
+libs.Random.randomWeightedChoice(["a","b"], [1, 3])
+HTTP.get("https://example.com/api").json()         # or HTTP.post(url, json={...})
+MembershipCheck(["@mychannel"], u)                  # True if u joined all of them
+apply_html_entities(message.text, message.entities, {})   # keep formatting when re-sending
+bunchify({"a": {"b": 1}}).a.b</pre>`},
+{id:"gate",t:"Examples to copy",h:`<h4>Ban list and force-join (the <code>@</code> command)</h4><pre data-name="@">if Bot.getData(f"{u}ban"):
+    bot.send("🚫 You are banned")
+    raise ReturnCommand
+if not MembershipCheck(["@mychannel"], u):
+    bot.send("Please join @mychannel first, then try again.")
+    raise ReturnCommand</pre><h4>Referral bonus</h4><pre data-name="start">ref = params if str(params).isdigit() else None
+if ref and int(ref) != u and not User.getData("referred"):
+    User.saveData("referred", True)
+    libs.Resources.anotherRes("Balance", user=int(ref)).add(5)
+    bot.sendMessage(chat_id=int(ref), text=f"🎉 {message.from_user.first_name} joined with your link")
+bot.send("Welcome! Your balance: " + str(libs.Resources.anotherRes("Balance").value()))</pre><h4>Admin-only command</h4><pre data-name="secret">admins = Bot.getData("AllBotAdminss") or []     # set it in Admin → Bot Data
+if str(u) not in [str(a) for a in admins]:
+    bot.send("Not allowed")
+    raise ReturnCommand
+bot.send("Hello boss")</pre><h4>Friendly error message (the <code>!</code> command)</h4><pre data-name="!">bot.send("⚠️ Something went wrong, please try again.")
+# options holds the error text; the Errors tab keeps the details</pre>`},
+{id:"panel",t:"Using the panel",h:`<ul><li><b>Intro</b>: start/stop, users, uptime, quick links. <b>Commands</b>: edit code, folders, select and delete. <b>Search</b>: find or replace text across every command.</li><li><b>Errors</b>: crashes with the command, line number and time. <b>Manage</b>: version, environment variables, export/import users. <b>Admin</b>: stats, users, broadcasts, bot data, user data. <b>Settings</b>: token, clone, export/import commands, delete.</li><li><b>More → Backup</b>: full backup of all bots with data, users only, commands as .py files, the database, and restore.</li></ul><p>Tip: after a deploy on a host with no persistent disk the database is wiped, so download a backup regularly.</p>`},
+{id:"move",t:"Moving a Telebot Creator (TPY) bot here",h:`<p>TPY is Python, so most code runs unchanged. <b>Settings → Import commands</b> accepts a JSON file, or paste text where each command starts with <code>=== /name ===</code>.</p><ul><li>Works: <code>bot.*</code>, <code>Bot.*</code>, <code>User.*</code> (including <code>user=</code>), <code>libs.Resources</code>, <code>libs.DateAndTime</code>, <code>libs.Random</code>, <code>libs.Webhook</code>, <code>HTTP</code>, <code>handleNextCommand</code>, <code>runCommand</code>, <code>runCommandAfter</code>, <code>Bot.broadcast</code>, <code>@ ~ ! *</code>, <code>/handler_*</code>, telebot keyboard types.</li><li>Your <b>data does not move by itself</b>. Recreate bot data (for example admin IDs) in Admin → Bot Data, or import a backup.</li><li>Not available: anything that talks to the Telebot Creator account (<code>Account.*</code>, <code>Bot.info(bot_id=…, api_key=…)</code>, reading another bot's data, <code>libs.tbcads</code> ads, crypto libraries). Ads reward instantly; the rest raises a clear error.</li><li>Telegram links in <code>HTTP.get("https://api.telegram.org/…")</code> work normally.</li></ul>`},
+{id:"fix",t:"Troubleshooting",h:`<ul><li><b>Bot doesn't answer</b>: Intro shows Active? Only one program may poll a token: stop the same bot on other hosts first.</li><li><b>"Stopped: ran longer than 10 seconds"</b>: a loop or slow HTTP call. Raise <code>EXEC_TIMEOUT</code> or move work to <code>runCommandAfter</code>.</li><li><b>NameError / AttributeError</b>: see Errors for the line. <code>message.photo</code> is None for text messages, so check first.</li><li><b>Button does nothing</b>: callback data must match a command name (or <code>cb:name</code>), and data is limited to 64 characters.</li><li><b>Webhook link says localhost</b>: set <code>PUBLIC_URL</code> to your site's address.</li></ul>`}
+];
+const stripTags=h=>h.replace(/<[^>]+>/g," ").toLowerCase();
+function vDocs(){
+  const q=(S.dq||"").toLowerCase(),L=DOCS.filter(d=>!q||(d.t.toLowerCase()+stripTags(d.h)).includes(q));
+  frame(`<div class="seg-row"><button class="circ" id="db" aria-label="Back to More">${I.back}</button><div class="field grow" style="min-height:42px">${I.search}<input id="dsq" placeholder="Search the docs" value="${esc(S.dq||"")}"></div></div>
+  ${L.map(d=>`<section class="card doc" id="d-${d.id}"><h3>${esc(d.t)}</h3>${d.h}</section>`).join("")||'<div class="empty">Nothing in the docs matches that.</div>'}`);
+  $("#db").onclick=()=>{S.more="menu";render()};
+  $("#dsq").oninput=e=>{S.dq=e.target.value;vDocs();const i=$("#dsq");i.focus();i.setSelectionRange(S.dq.length,S.dq.length)};
+  document.querySelectorAll(".doc pre").forEach(pre=>{
+    const code=pre.textContent,bar=document.createElement("div");bar.className="prebar";
+    bar.innerHTML=`<button class="lnk" data-a="c">${I.copy} Copy</button>${S.bot&&pre.dataset.name?`<button class="lnk" data-a="a">${I.plus} Add as command “${esc(pre.dataset.name)}”</button>`:""}`;
+    pre.after(bar);
+    bar.querySelector('[data-a="c"]').onclick=async()=>{try{await navigator.clipboard.writeText(code);toast("Copied")}catch{toast("Copy isn't allowed in this browser")}};
+    const add=bar.querySelector('[data-a="a"]');if(add)add.onclick=async()=>{try{await api(`/api/bots/${S.bot.id}/commands`,"POST",{name:pre.dataset.name,code});S.cmds=await api(`/api/bots/${S.bot.id}/commands`);toast(`Added to @${S.bot.username}`)}catch(e){toast(e.message)}};
+  })}
+
+/* ---------- More ---------- */
+function vMore(){
+  if(S.more=="docs")return vDocs();
+  const dl=(href,t,s)=>`<a class="lr" href="${href}" download>${I.down}<span class="grow"><b>${t}</b><small class="mut" style="display:block">${s}</small></span></a>`;
+  frame(`<h2 class="page">More</h2>
+  <button class="list-item" id="mDocs">${I.lines}<span class="grow"><b>Docs</b><small>How to build bots with Python, with examples to copy</small></span>${I.chev}</button>
+  <div class="card"><h4>Backup</h4><p>Keep backup files private: they contain bot tokens and user data.</p><div class="rows" style="padding:0">
+    ${dl("/api/backup/all?data=1","All bots with data","Commands, folders, variables, bot data, user data and users (JSON)")}
+    ${dl("/api/backup/all?data=0","All bots, commands only","Commands, folders, variables and mini apps (JSON)")}
+    ${dl("/api/backup/users?format=json","Only users, JSON","Every user of every bot")}
+    ${dl("/api/backup/users?format=csv","Only users, CSV","Opens in Excel or Google Sheets")}
+    ${dl("/api/backup/commands.zip","All commands as .py files","One folder per bot (ZIP)")}
+    ${dl("/api/backup/db","Database file (.db)","The whole panel, exactly as it is")}</div></div>
+  <div class="card"><h4>Restore</h4><p>Load a backup made here. Bots found by token or username are updated, new ones are added.</p><div class="file"><label class="btn">Choose backup file<input type="file" id="rf" accept=".json"></label><span id="rn2">No file chosen</span></div></div>
+  <div class="card"><h4>Tools</h4><div class="rows" style="padding:0">
+    <button class="lr" id="mAdd">${I.plus}<span class="grow">Add a bot</span></button>
+    <button class="lr" id="mRe">${I.refresh}<span class="grow">Restart all running bots</span></button>
+    <button class="lr" id="mSys">${I.gear}<span class="grow">System info</span></button>
+    <a class="lr" href="/logout" style="text-decoration:none">${I.arrow}<span class="grow">Sign out</span></a></div></div>`);
+  $("#mDocs").onclick=()=>{S.more="docs";S.dq="";render()};$("#mAdd").onclick=addBot;
+  $("#rf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#rn2").textContent=f.name;if(!confirm("Restore from this backup? Commands of matching bots are replaced by the ones in the file."))return;
+    try{const r=await api("/api/restore","POST",{content:await f.text()});toast(`${r.created} added, ${r.updated} updated${r.skipped?`, ${r.skipped} skipped (no token)`:""}`);S.cmds=[];await loadBots()}catch(x){toast(x.message)}};
+  $("#mRe").onclick=async()=>{const r=await api("/api/restart_all","POST");toast(`Restarted ${r.restarted} bot(s)`);setTimeout(loadBots,600)};
+  $("#mSys").onclick=async()=>{const s=await api("/api/system"),el=document.createElement("div");el.className="sheet";
+    el.innerHTML=`<div class="row"><b class="grow">System info</b><button class="btn ghost sm" id="sx2">Close</button></div><div class="rows" style="padding:0">${[["Panel uptime",hms(s.uptime)],["Bots running",`${s.running} of ${s.bots}`],["Worker processes",s.workers],["Command time limit",s.timeout+" s"],["Scheduled tasks",s.scheduled],["Database",s.db_mb+" MB"],["Python",s.python+" on "+s.platform],["Public URL",s.public_url]].map(([k,v])=>`<div class="kvr"><span>${k}</span><span style="text-align:right;word-break:break-all">${esc(v)}</span></div>`).join("")}</div>`;
+    document.body.append(el);$("#sx2",el).onclick=()=>el.remove()}}
+
+/* ---------- Delete bot ---------- */
+const dangerCard=()=>`<div class="card danger"><h4>Delete bot</h4><p>Permanently remove this bot, its commands, data, users and errors from the panel. The bot itself on Telegram is not touched. Download a backup first (More → Backup).</p><button class="btn full red" id="dlb">${I.trash} Delete bot</button></div>`;
+async function deleteBot(){const b=S.bot;
+  const t=await ask("Delete bot",`This deletes @${b.username} and everything saved for it. Type its username to confirm.`,b.username,"Delete bot");if(t===null)return;
+  if(t.trim().replace(/^@/,"").toLowerCase()!==b.username.toLowerCase())return toast("That username doesn't match. Nothing was deleted.");
+  try{await api(`/api/bots/${b.id}`,"DELETE");S.bot=null;S.cmds=[];S.cur=null;S.open=[];toast("Bot deleted");await loadBots()}catch(e){toast(e.message)}}
+
 /* ---------- Mini App ---------- */
 async function tMiniApp(){const B=$("#body"),id=S.bot.id,m=await api(`/api/bots/${id}/miniapp`);
   B.innerHTML=`<div class="card"><h4>Mini app</h4><p>Write the web page that opens inside Telegram. It's served at <span class="mono" style="word-break:break-all">${esc(m.url)}</span></p><textarea class="minitext" id="mh" spellcheck="false" aria-label="Mini app HTML">${esc(m.html)}</textarea>
@@ -303,7 +431,7 @@ async function tErrors(){const B=$("#body"),id=S.bot.id;
 async function tManage(){const B=$("#body"),id=S.bot.id,ver=(await api(`/api/bots/${id}/intro`)).version;let env=await api(`/api/bots/${id}/env`),raw=false;
   B.innerHTML=`<div class="card"><h4>Update version <span class="mut">— current: ${esc(ver)}</span></h4><div class="act"><div class="field"><input id="nv" placeholder="e.g. 1.0.0"></div><button class="btn dim sm" id="uv" style="min-height:44px">Update</button></div></div>
   <div class="card"><div class="row"><h4 class="grow" style="margin:0">Environment variables</h4><button class="lnk" id="er">Edit raw ›</button></div><p class="mut" style="margin:10px 0;font-size:14px">Injected as globals into every command (e.g. <code>APP_URL</code>, <code>ADMIN_IDS</code>). Values are strings unless you mark a row <b style="color:var(--ink)">raw</b> (for numbers, lists, <code>{...}</code>).</p><div id="envb"></div><button class="lnk" id="av">+ Add variable</button><div class="right"><button class="btn sm" id="se">Save .env</button></div></div>
-  <div class="card"><h4>Export users</h4><div class="radios">${["json","csv"].map((f,i)=>`<label><input type="radio" name="uf" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><label class="chk"><input type="checkbox" id="la" checked>Last Active Date</label><label class="chk"><input type="checkbox" id="cd" checked>Creation Date</label><button class="btn full" id="eu">${I.down} Export</button></div>${importUsersCard()}`;
+  <div class="card"><h4>Export users</h4><div class="radios">${["json","csv"].map((f,i)=>`<label><input type="radio" name="uf" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><label class="chk"><input type="checkbox" id="la" checked>Last Active Date</label><label class="chk"><input type="checkbox" id="cd" checked>Creation Date</label><button class="btn full" id="eu">${I.down} Export</button></div>${importUsersCard()}${dangerCard()}`;
   const read=()=>{if(raw)return $("#rawta").value.split("\n").map(l=>l.trim()).filter(l=>l&&!l.startsWith("#")).map(l=>{const m=l.match(/^([^=:]+?)\s*(:?=)\s*(.*)$/);return m?{k:m[1].trim(),v:m[3],raw:m[2]==":="?1:0}:null}).filter(Boolean);
     return [...document.querySelectorAll(".erow")].map(r=>({k:$(".ek",r).value.trim(),v:$(".ev",r).value,raw:$(".er2",r).checked?1:0})).filter(x=>x.k)};
   const draw=()=>{$("#av").style.display=raw?"none":"";$("#er").textContent=raw?"‹ Edit rows":"Edit raw ›";
@@ -315,7 +443,7 @@ async function tManage(){const B=$("#body"),id=S.bot.id,ver=(await api(`/api/bot
   $("#se").onclick=async()=>{try{await api(`/api/bots/${id}/env`,"PUT",{items:read()});env=await api(`/api/bots/${id}/env`);draw();toast("Saved. New values apply to the next message.")}catch(e){toast(e.message)}};
   $("#uv").onclick=async()=>{try{await api(`/api/bots/${id}/version`,"POST",{version:$("#nv").value});toast("Version updated");tManage()}catch(e){toast(e.message)}};
   $("#eu").onclick=()=>{location.href=`/api/bots/${id}/export_users?format=${document.querySelector("input[name=uf]:checked").value}&last_active=${$("#la").checked?1:0}&created=${$("#cd").checked?1:0}`};
-  bindImportUsers(id)}
+  bindImportUsers(id);$("#dlb").onclick=deleteBot}
 
 /* ---------- editor ---------- */
 const KW="and|as|break|class|continue|def|elif|else|except|finally|for|from|if|import|in|is|lambda|not|or|pass|raise|return|try|while|with|yield";
@@ -390,7 +518,7 @@ function tSettings(){const b=S.bot,B=$("#body"),id=b.id,botId=b.token_hint?"":""
   <div class="card"><div class="row"><div class="grow"><h4>Auto-translate (92 languages)</h4><p style="margin:0">Messages are translated and delivered in each user's own language. Users can pick their language via libs.translate.setLang.</p></div><button class="toggle" id="tr" aria-label="Auto-translate"></button></div></div>
   <div class="card"><h4>Update token</h4><div class="act"><div class="field"><input id="nt2" placeholder="New token" autocomplete="off"></div><button class="btn dim" id="ut">Update</button></div></div>
   <div class="card"><h4>Transfer bot</h4><div class="act"><div class="field"><input id="em" placeholder="Recipient email"></div><button class="btn dim" id="tf">Transfer</button></div></div>
-  <div class="card"><h4>Clone bot</h4><p>Duplicate this bot with all commands and settings.</p><button class="btn full" id="cl">Clone</button></div>
+  <div class="card"><h4>Clone bot</h4><p>Duplicate this bot with all commands and settings.</p><button class="btn full" id="cl">Clone</button></div>${dangerCard()}
   <div class="card"><h4>Import users</h4><p>Upload a JSON, CSV or TXT with Telegram user IDs: our export or another platform's. Every ID is checked with Telegram through this bot and only users it can reach are added, about 10 a second, so a big list takes hours. You can leave this page.</p><div class="file"><label class="btn">Choose file<input type="file" id="uf" accept=".json,.csv,.txt"></label><span id="un2">No file chosen</span></div></div>
   <div class="card"><h4>Export bot</h4><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="ef" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><label class="chk"><input type="checkbox" id="eo">Commands Only</label><label class="chk"><input type="checkbox" id="ed">Include Bot Data</label><button class="btn full" id="ex">${I.down} Export</button></div>
   <div class="card"><h4>Import commands</h4><p>Upload or paste an exported bot file (JSON / YAML / TXT). Existing commands are updated, new ones added — ideal for editing your bot with AI, then re-uploading.</p><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="if" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><div class="file"><label class="btn">Choose file<input type="file" id="cf" accept=".json,.yaml,.yml,.txt"></label><span id="cn">No file chosen</span></div><textarea class="paste" id="cx" placeholder="…or paste your exported commands here"></textarea><label class="chk"><input type="checkbox" id="rp">Replace all existing commands</label><button class="btn full" id="im">${I.up} Import</button></div>`;
@@ -402,6 +530,7 @@ function tSettings(){const b=S.bot,B=$("#body"),id=b.id,botId=b.token_hint?"":""
   $("#tr").onclick=async e=>{const on=!e.currentTarget.classList.contains("on");e.currentTarget.classList.toggle("on",on);await api(`/api/bots/${id}/settings`,"POST",{translate:on});toast(on?"Auto-translate saved as on":"Auto-translate saved as off")};
   $("#ut").onclick=async()=>{try{await api(`/api/bots/${id}/token`,"POST",{token:$("#nt2").value});toast("Token updated");$("#nt2").value="";tSettings()}catch(e){toast(e.message)}};
   $("#tf").onclick=async()=>{try{await api(`/api/bots/${id}/transfer`,"POST",{email:$("#em").value})}catch(e){toast(e.message)}};
+  $("#dlb").onclick=deleteBot;
   $("#cl").onclick=async()=>{const t=await ask("Clone bot","Paste the token of the new bot that will receive a copy of everything.","123456:ABC-DEF…","Clone");if(!t)return;try{await api(`/api/bots/${id}/clone`,"POST",{token:t});toast("Bot cloned");await loadBots()}catch(e){toast(e.message)}};
   $("#uf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#un2").textContent=f.name;try{const r=await api(`/api/bots/${id}/import_users`,"POST",{content:await f.text()});toast(`Checking ${r.count} user IDs in the background`)}catch(x){toast(x.message)}};
   $("#ex").onclick=()=>{const f=document.querySelector('input[name=ef]:checked').value;location.href=`/api/bots/${id}/export?format=${f}&commands_only=${$("#eo").checked?1:0}&bot_data=${$("#ed").checked?1:0}`};
