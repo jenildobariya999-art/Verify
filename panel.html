@@ -2,334 +2,263 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0a">
 <title>Botbench</title>
 <style>
-  :root { --bg:#e6eaf0; --card:#f7f8fa; --ink:#1b2433; --muted:#5b6679; --line:#cfd6e2;
-          --rail:#1b2433; --rail-ink:#c9d2e3; --accent:#2f6fed; --ok:#1e9e6a; --err:#c23b3b;
-          --code-bg:#0f1624; --code-ink:#dde6f7;
-          --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  * { box-sizing:border-box; }
-  html, body { height:100%; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
-  button, input { font:inherit; }
-  button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible
-    { outline:3px solid #2f6fed66; outline-offset:1px; }
-  .app { display:grid; grid-template-columns:240px 1fr; height:100%; }
-  .rail { background:var(--rail); color:var(--rail-ink); padding:18px 12px; display:flex; flex-direction:column; gap:6px; overflow:auto; }
-  .rail h1 { margin:0 8px 14px; font-size:20px; color:#fff; letter-spacing:-.01em; }
-  .bot { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:6px; background:none;
-         border:0; color:inherit; text-align:left; cursor:pointer; width:100%; }
-  .bot:hover { background:#ffffff14; }
-  .bot[aria-current="true"] { background:#ffffff24; color:#fff; }
-  .dot { width:9px; height:9px; border-radius:50%; background:#5b6679; flex:none; }
-  .dot.on { background:#3ddc97; }
-  .bot small { display:block; color:#8e9ab2; }
-  .rail .spacer { flex:1; }
-  .rail .link { color:#8e9ab2; padding:8px 10px; text-decoration:none; }
-  .btn { padding:8px 14px; border-radius:4px; border:1px solid #b9c2d3; background:#fff; color:var(--ink); cursor:pointer; font-weight:600; }
-  .btn:hover { background:#eef2f9; }
-  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .btn.primary:hover { background:#2459c4; }
-  .btn.danger { color:var(--err); }
-  .rail .btn { background:#ffffff14; border-color:#ffffff30; color:#fff; }
-  main { display:flex; flex-direction:column; min-width:0; height:100%; }
-  .top { display:flex; align-items:center; gap:14px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--card); flex-wrap:wrap; }
-  .top h2 { margin:0; font-size:19px; }
-  .top .meta { color:var(--muted); }
-  .top .grow { flex:1; }
-  .tabs { display:flex; gap:4px; padding:0 22px; background:var(--card); border-bottom:1px solid var(--line); }
-  .tab { padding:10px 14px; background:none; border:0; border-bottom:3px solid transparent; cursor:pointer; color:var(--muted); font-weight:600; }
-  .tab[aria-selected="true"] { color:var(--ink); border-color:var(--accent); }
-  .pane { flex:1; min-height:0; overflow:auto; }
-  .empty { max-width:420px; margin:12vh auto; text-align:center; color:var(--muted); padding:0 20px; }
-  .empty h2 { color:var(--ink); }
-  .cmds { display:grid; grid-template-columns:230px 1fr; height:100%; }
-  .list { border-right:1px solid var(--line); background:var(--card); overflow:auto; padding:10px; }
-  .list .item { display:block; width:100%; padding:7px 10px; border-radius:4px; border:0; background:none; text-align:left;
-                cursor:pointer; font-family:var(--mono); font-size:13.5px; }
-  .list .item:hover { background:#e4e9f2; }
-  .list .item[aria-current="true"] { background:var(--accent); color:#fff; }
-  .list .btn { width:100%; margin-top:8px; }
-  .editor { display:flex; flex-direction:column; min-width:0; min-height:0; }
-  .edbar { display:flex; gap:10px; align-items:center; padding:10px 16px; flex-wrap:wrap; }
-  .edbar input { padding:7px 10px; border:1px solid #b9c2d3; border-radius:4px; font-family:var(--mono); width:220px; background:#fff; }
-  .edbar .hint { color:var(--muted); font-size:13px; }
-  textarea.code { flex:1; min-height:240px; width:100%; resize:none; border:0; padding:16px 18px; background:var(--code-bg);
-                  color:var(--code-ink); font:14px/1.6 var(--mono); tab-size:4; white-space:pre; }
-  .test { background:var(--card); border-top:1px solid var(--line); padding:10px 16px; max-height:38%; overflow:auto; }
-  .test .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .test input { flex:1; min-width:160px; padding:7px 10px; border:1px solid #b9c2d3; border-radius:4px; background:#fff; }
-  pre.out { margin:10px 0 0; white-space:pre-wrap; font:13px/1.5 var(--mono); }
-  .out .act { color:#1c4fb8; } .out .bad { color:var(--err); } .out .mut { color:var(--muted); }
-  .logs { padding:14px 22px; font:13px/1.55 var(--mono); }
-  .logline { padding:4px 0; border-bottom:1px solid #d7dde8; white-space:pre-wrap; }
-  .lv-error { color:var(--err); } .lv-info { color:var(--muted); }
-  .help { max-width:760px; padding:20px 28px 40px; }
-  .help h3 { margin:26px 0 6px; }
-  .help code, .help pre { font-family:var(--mono); font-size:13px; }
-  .help pre { background:var(--code-bg); color:var(--code-ink); padding:12px 14px; border-radius:6px; overflow:auto; }
-  .help code { background:#d9e0ec; padding:1px 5px; border-radius:3px; }
-  .help pre code { background:none; padding:0; }
-  dialog { border:0; border-radius:10px; padding:24px; width:min(440px, 92vw); background:var(--card); box-shadow:0 20px 50px -20px #000a; }
-  dialog::backdrop { background:#1b243399; }
-  dialog h3 { margin:0 0 6px; }
-  dialog p { margin:0 0 14px; color:var(--muted); }
-  dialog input { width:100%; padding:10px 12px; border:1px solid #b9c2d3; border-radius:4px; background:#fff; font-family:var(--mono); }
-  dialog .row { display:flex; justify-content:flex-end; gap:10px; margin-top:16px; }
-  .msg { color:var(--err); margin-top:10px; min-height:1.4em; }
-  @media (max-width:760px) {
-    .app { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
-    .rail { flex-direction:row; align-items:center; overflow-x:auto; padding:8px; }
-    .rail h1, .rail .spacer, .rail .link { display:none; }
-    .bot { width:auto; white-space:nowrap; }
-    .cmds { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
-    .list { border-right:0; border-bottom:1px solid var(--line); max-height:150px; }
-  }
+:root{--bg:#0a0a0a;--card:#111113;--card2:#18181b;--line:#242428;--ink:#f4f4f5;--mut:#9ca3af;--pri:#8b5cf6;--pri2:#7c3aed;
+--green:#22c55e;--orange:#f59e0b;--red:#ef4444;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input,textarea{font:inherit;color:inherit}
+svg.i{width:1.25em;height:1.25em;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#app{max-width:680px;margin:0 auto;min-height:100vh;padding:calc(76px + env(safe-area-inset-top)) 14px calc(84px + env(safe-area-inset-bottom))}
+header{position:fixed;top:0;left:0;right:0;z-index:20;background:#0a0a0aee;backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top)}
+header>div{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:14px;padding:12px 16px}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(145deg,#1d2a44,#142033);display:grid;place-items:center;color:#38bdf8}
+.logo svg{width:26px;height:26px}
+header h1{margin:0;font-size:22px;font-weight:650;flex:1}
+header .bell{color:#a78bfa;background:none;border:0;padding:6px}
+nav{position:fixed;bottom:0;left:0;right:0;z-index:20;background:#0a0a0af2;border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav>div{max-width:680px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr)}
+nav button{background:none;border:0;color:#d4d4d8;padding:10px 0 8px;display:grid;justify-items:center;gap:3px;font-size:14px;cursor:pointer}
+nav button svg{width:28px;height:28px}
+nav button.on{color:#a78bfa}
+nav button.on svg{background:#8b5cf633;border-radius:9px;padding:4px;width:34px;height:34px}
+.row{display:flex;align-items:center;gap:10px}
+.circ{width:52px;height:52px;border-radius:50%;border:1px solid #3b2d6b;background:#12101c;color:#a78bfa;display:grid;place-items:center;cursor:pointer;flex:none}
+.seg-row{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+.seg{flex:1;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;border:1px solid #2c2c33;border-radius:18px;padding:6px;background:#0f0f12}
+.seg button{border:0;background:none;color:#d4d4d8;padding:11px 6px;border-radius:13px;display:flex;gap:8px;align-items:center;justify-content:center;font-weight:600;cursor:pointer;font-size:16px}
+.seg button.on{background:var(--pri);color:#fff}
+.pills{display:flex;gap:6px;overflow-x:auto;border:1px solid #2c2c33;border-radius:18px;padding:6px;margin-bottom:14px;background:#0f0f12;scrollbar-width:none}
+.pills button{border:0;background:none;color:#d4d4d8;padding:11px 18px;border-radius:13px;font-weight:600;white-space:nowrap;cursor:pointer;font-size:16px}
+.pills button.on{background:var(--pri);color:#fff}
+.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:18px;margin-bottom:14px}
+.card h4{margin:0 0 10px;font-size:15px;font-weight:500;letter-spacing:.09em;text-transform:uppercase;color:#b4b4bb}
+.card p{margin:0 0 12px;color:#c4c4cc;font-size:17px;line-height:1.5}
+.field{display:flex;align-items:center;gap:10px;background:var(--card2);border-radius:16px;padding:0 14px;min-height:56px}
+.field input,.field textarea{flex:1;min-width:0;background:none;border:0;outline:0;padding:14px 0;font-size:18px}
+.field input::placeholder,textarea::placeholder{color:#8b8b95}
+.field.mono input{font-family:var(--mono);font-size:17px;letter-spacing:.04em}
+.ic{background:none;border:0;color:#8e97a8;padding:6px;cursor:pointer;display:grid}
+.act{display:flex;gap:10px}.act .field{flex:1}
+.btn{border:0;border-radius:16px;background:var(--pri);color:#fff;font-weight:650;padding:0 22px;min-height:56px;cursor:pointer;font-size:18px;display:inline-flex;align-items:center;justify-content:center;gap:10px}
+.btn.full{width:100%}.btn.dim{background:#4c3a8a;color:#cfc3f5}.btn.ghost{background:#202024;color:#e4e4e7}.btn.red{background:#3a1416;color:#fca5a5}
+.btn.sm{min-height:44px;padding:0 16px;font-size:16px;border-radius:12px}
+.toggle{width:62px;height:36px;border-radius:20px;background:#2b2b31;border:0;position:relative;cursor:pointer;flex:none}
+.toggle::after{content:"";position:absolute;top:4px;left:4px;width:28px;height:28px;border-radius:50%;background:#fff;transition:.15s}
+.toggle.on{background:var(--pri)}.toggle.on::after{left:30px}
+.radios{display:flex;gap:22px;margin:4px 0 14px;flex-wrap:wrap}
+.radios label,.chk{display:flex;align-items:center;gap:10px;font-size:18px;cursor:pointer}
+.radios input{appearance:none;width:26px;height:26px;border-radius:50%;background:#fff;margin:0;border:0;display:grid;place-items:center}
+.radios input:checked{background:#fff;box-shadow:inset 0 0 0 4px #fff,inset 0 0 0 20px var(--pri);outline:3px solid #8b5cf666}
+.chk input{appearance:none;width:26px;height:26px;border-radius:7px;background:#fff;margin:0}
+.chk input:checked{background:var(--pri) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5 9-10'/%3E%3C/svg%3E") center/18px no-repeat}
+.chk{margin-bottom:14px}
+.file{display:flex;align-items:center;gap:14px;margin-bottom:14px;color:#d4d4d8;font-size:18px}
+.file label.btn{min-height:50px;font-size:18px;border-radius:12px;padding:0 20px}
+.file input{display:none}
+.paste{width:100%;min-height:150px;background:var(--card2);border:1px solid #2c2c33;border-radius:14px;padding:12px 14px;font:15px/1.5 var(--mono);outline:0;resize:vertical;margin-bottom:14px}
+.stats{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:22px;background:var(--card);overflow:hidden;margin-bottom:14px}
+.stats>div{padding:16px 18px;border-bottom:1px solid var(--line);border-right:1px solid var(--line)}
+.stats>div:nth-child(2n){border-right:0}.stats>div:nth-last-child(-n+2){border-bottom:0}
+.stats small{display:block;color:#c4c4cc;font-size:17px}.stats b{font-size:36px;line-height:1.2;font-weight:650}
+.stats em{display:block;color:var(--mut);font-style:normal;font-size:16px}
+.g{color:var(--green)}.o{color:var(--orange)}.r{color:var(--red)}
+.cmd{display:flex;align-items:center;gap:14px;padding:13px 0}
+.cmd .n{font-family:var(--mono);font-size:19px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;display:flex;gap:12px;align-items:center}
+.cmd .n i{width:14px;height:14px;border-radius:50%;background:var(--green);flex:none}
+.cmd .l{color:var(--mut);font-size:17px;white-space:nowrap}
+.bar{width:38%;height:8px;background:#222226;border-radius:5px;overflow:hidden}.bar span{display:block;height:100%;background:var(--pri);border-radius:5px;min-width:6px}
+.list-item{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px 16px;margin-bottom:10px;cursor:pointer;width:100%;text-align:left}
+.list-item b{display:block;font-size:18px}.list-item small{color:var(--mut)}
+.dot{width:11px;height:11px;border-radius:50%;background:#52525b;flex:none}.dot.on{background:var(--green)}
+.grow{flex:1;min-width:0}
+.badge{font-size:13px;padding:2px 9px;border-radius:9px;background:#3a1416;color:#fca5a5}
+.kv{border-top:1px solid var(--line);padding:12px 0}.kv:first-child{border-top:0}
+.kv b{font-family:var(--mono);font-size:16px;color:#c4b5fd}
+.kv textarea{width:100%;background:var(--card2);border:1px solid #2c2c33;border-radius:12px;padding:10px;font:14px/1.45 var(--mono);margin:8px 0;min-height:70px;outline:0}
+.empty{text-align:center;color:var(--mut);padding:36px 10px;font-size:17px}
+.tabs{display:flex;align-items:flex-end;border-bottom:1px solid #26262b;margin:0 -14px 0;padding:0 14px;overflow-x:auto;scrollbar-width:none;gap:4px}
+.tab{display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid #26262b;border-bottom:0;border-radius:16px 16px 0 0;background:#000;white-space:nowrap;cursor:pointer;font-size:20px}
+.tab.off{background:#101012;color:var(--mut)}
+.py{font-size:15px;font-weight:700;color:#a5a3f5;background:#1e1b4b;padding:8px 12px;border-radius:9px}
+.tab .x{color:#8b8b95;padding:0 4px;background:none;border:0;font-size:22px}
+.addtab{margin-left:auto;background:none;border:0;color:#d4d4d8;padding:12px 8px}
+.subbar{display:flex;align-items:center;gap:16px;padding:14px 0;color:#38bdf8;font-size:21px;border-bottom:1px solid #26262b;margin:0 -14px;padding-left:14px;padding-right:14px}
+.subbar span{color:#e4e4e7}.subbar .ic{color:#d4d4d8}
+.toolbar{display:flex;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid #26262b;margin:0 -14px;padding-left:14px;padding-right:14px;background:#141416}
+.tb{background:#222225;border:0;border-radius:12px;color:#d4d4d8;width:54px;height:50px;display:grid;place-items:center;cursor:pointer}
+.tb.w{width:auto;padding:0 20px;display:flex;gap:10px;font-size:19px;align-items:center}
+.tb:disabled{opacity:.45}.sep{width:1px;height:30px;background:#34343a;margin:0 6px}
+.ed{position:relative;margin:0 -14px;background:#000;min-height:62vh;counter-reset:l}
+.hl,.ed textarea{margin:0;padding:12px 14px 80px 66px;font:20px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;tab-size:4;border:0;width:100%}
+.hl{position:absolute;inset:0;pointer-events:none;color:#e8e8ee}
+.hl div{position:relative;min-height:1.55em}
+.hl div::before{counter-increment:l;content:counter(l);position:absolute;left:-52px;width:36px;text-align:right;color:#a3a3ad}
+.hl div.fold::after{content:"";position:absolute;left:-12px;top:.62em;border:5px solid transparent;border-top:7px solid #6b6b75;border-bottom:0}
+.ed textarea{position:relative;display:block;background:transparent;color:transparent;caret-color:#fff;resize:none;outline:0;overflow:hidden;min-height:62vh}
+.k{color:#ff9f43}.s{color:#7ee787}.c{color:#a855f7}.t{color:#4fd1c5}.f{color:#f5d76e}.o2{color:#ff9f43}
+.fab{position:fixed;right:max(16px,calc(50% - 324px));bottom:calc(92px + env(safe-area-inset-bottom));width:60px;height:60px;border-radius:20px;background:var(--pri);border:0;color:#fff;display:grid;place-items:center;box-shadow:0 10px 30px #8b5cf655;cursor:pointer;z-index:15}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;background:#141416;border-top:1px solid #2c2c33;border-radius:22px 22px 0 0;padding:16px;max-height:55vh;overflow:auto;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+.sheet pre{margin:8px 0 0;white-space:pre-wrap;font:14px/1.5 var(--mono)}
+dialog{border:1px solid var(--line);border-radius:24px;background:var(--card);color:var(--ink);padding:22px;width:min(440px,92vw)}
+dialog::backdrop{background:#000a}dialog h3{margin:0 0 6px;font-size:22px}dialog p{margin:0 0 14px;color:var(--mut)}
+dialog .act{margin-top:16px;justify-content:flex-end}
+.toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#27272a;color:#fff;padding:12px 18px;border-radius:14px;z-index:60;max-width:90vw;border:1px solid #3f3f46}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #a78bfa;outline-offset:2px}
+h2.page{margin:6px 0 16px;font-size:26px}
 </style>
 </head>
 <body>
-<div class="app">
-  <aside class="rail">
-    <h1>Botbench</h1>
-    <div id="bots" style="display:contents"></div>
-    <button class="btn" id="addBot">Add a bot</button>
-    <div class="spacer"></div>
-    <a class="link" href="/logout">Sign out</a>
-  </aside>
-  <main id="main"></main>
-</div>
-
-<dialog id="dlgBot">
-  <h3>Add a bot</h3>
-  <p>Create a bot with @BotFather on Telegram, then paste its token here.</p>
-  <input id="tokenIn" placeholder="123456:ABC-DEF…" autocomplete="off" spellcheck="false">
-  <div class="msg" id="tokenMsg"></div>
-  <div class="row"><button class="btn" id="tokenCancel">Cancel</button><button class="btn primary" id="tokenOk">Add bot</button></div>
-</dialog>
-
-<dialog id="dlgCmd">
-  <h3>New command</h3>
-  <p>Use <code>/name</code> for a command, <code>*</code> for any other text, or <code>cb:data</code> for a button press.</p>
-  <input id="cmdIn" placeholder="/help" autocomplete="off" spellcheck="false">
-  <div class="msg" id="cmdMsg"></div>
-  <div class="row"><button class="btn" id="cmdCancel">Cancel</button><button class="btn primary" id="cmdOk">Create command</button></div>
-</dialog>
-
+<div id="app"></div>
+<dialog id="dlg"><h3 id="dT"></h3><p id="dP"></p><div class="field"><input id="dI" autocomplete="off" spellcheck="false"></div><p id="dE" style="color:#fca5a5;margin:10px 0 0"></p><div class="act"><button class="btn ghost sm" id="dC">Cancel</button><button class="btn sm" id="dO">OK</button></div></dialog>
 <script>
-const $ = (s, r = document) => r.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const S = { bots: [], bot: null, cmds: [], cmd: null, tab: "commands", timer: null };
+const $=(s,r=document)=>r.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const P={home:'<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',bots:'<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',ai:'<path d="M10 3l1.8 5.2L17 10l-5.2 1.8L10 17l-1.8-5.2L3 10l5.2-1.8z"/><path d="M18 3v4M16 5h4M18 16v4M16 18h4"/>',earn:'<circle cx="12" cy="12" r="9"/><path d="M15 9.5c0-1.4-1.3-2.5-3-2.5s-3 1-3 2.3c0 3 6 1.7 6 4.7 0 1.3-1.3 2.5-3 2.5s-3-1.1-3-2.5M12 5.5v13"/>',more:'<path d="M4 7h16M4 12h16M4 17h16"/>',bell:'<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/>',back:'<path d="M15 5l-7 7 7 7"/>',arrow:'<path d="M19 12H5M11 6l-6 6 6 6"/>',gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',users:'<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M17 14.2c2.4.2 4 2.2 4 4.8"/>',sliders:'<path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="9" r="2" fill="currentColor"/><circle cx="12" cy="15" r="2" fill="currentColor"/><circle cx="19" cy="8" r="2" fill="currentColor"/>',undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',paste:'<rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/>',save:'<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',search:'<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.5-4.5"/>',wand:'<path d="M5 19L16 8"/><path d="M14 6l4 4"/><path d="M18 3v3M16.5 4.5h3M6 5v2M5 6h2"/>',code:'<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/>',plus:'<path d="M12 5v14M5 12h14"/>',eye:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',eyeoff:'<path d="M3 3l18 18"/><path d="M10 6.2A9.6 9.6 0 0 1 12 6c6.4 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.3 7.5C3.6 9.2 2 12 2 12s3.6 7 10 7c1.5 0 2.8-.4 4-1"/>',down:'<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',up:'<path d="M12 16V5M7 9l5-5 5 5M5 20h14"/>',chev:'<path d="M9 5l7 7-7 7"/>',logo:'<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4.5M9 13v2M15 13v2"/>'};
+const I=new Proxy({},{get:(_,k)=>`<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${P[k]||""}</svg>`});
+const S={page:"bots",bots:[],bot:null,tab:"manage",sub:"stats",cmds:[],open:[],cur:null,q:"",showTok:null,sheet:null};
+async function api(p,m="GET",b){const r=await fetch(p,{method:m,headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined});if(r.status==401){location.reload();return}const d=await r.json();if(!r.ok)throw new Error(d.error||"Something went wrong.");return d}
+function toast(t){const e=document.createElement("div");e.className="toast";e.textContent=t;document.body.append(e);setTimeout(()=>e.remove(),2200)}
+function ask(title,desc,ph,ok="OK",val=""){return new Promise(res=>{const d=$("#dlg");$("#dT").textContent=title;$("#dP").textContent=desc;$("#dI").placeholder=ph;$("#dI").value=val;$("#dO").textContent=ok;$("#dE").textContent="";
+const done=v=>{d.close();res(v)};$("#dC").onclick=()=>done(null);$("#dO").onclick=()=>done($("#dI").value);$("#dI").onkeydown=e=>{if(e.key==="Enter")done($("#dI").value)};d.showModal();$("#dI").focus()})}
+const ago=t=>{if(!t)return"never";const s=Date.now()/1e3-t;return s<90?"just now":s<5400?Math.round(s/60)+" min ago":s<129600?Math.round(s/3600)+" h ago":Math.round(s/86400)+" d ago"};
 
-async function api(path, method = "GET", body) {
-  const r = await fetch(path, { method, headers: { "Content-Type": "application/json" },
-                                body: body ? JSON.stringify(body) : undefined });
-  if (r.status === 401) { location.reload(); return; }
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.error || "Something went wrong.");
-  return data;
+function frame(inner){
+  $("#app").innerHTML=`<header><div><div class="logo">${I.logo}</div><h1>Botbench</h1><button class="bell" aria-label="Notifications">${I.bell}</button></div></header><div id="view">${inner}</div>
+  <nav><div>${[["home","Home"],["bots","Bots"],["ai","AI"],["earn","Earn"],["more","More"]].map(([k,l])=>`<button data-p="${k}" class="${S.page==k?"on":""}">${I[k]}<span>${l}</span></button>`).join("")}</div></nav>`;
+  document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{S.page=b.dataset.p;if(S.page=="bots"&&!S.bot)S.cur=null;render()});
 }
+async function loadBots(){S.bots=await api("/api/bots");if(S.bot)S.bot=S.bots.find(b=>b.id==S.bot.id)||null;render()}
+async function loadCmds(){S.cmds=await api(`/api/bots/${S.bot.id}/commands`);render()}
+function openBot(b){S.bot=b;S.tab="manage";S.cur=null;S.open=[];S.cmds=[];S.page="bots";render();loadCmds()}
+async function addBot(){const t=await ask("Add a bot","Create a bot with @BotFather on Telegram, then paste its token here.","123456:ABC-DEF…","Add bot");if(!t)return;
+  try{const b=await api("/api/bots","POST",{token:t});S.bots=await api("/api/bots");openBot(S.bots.find(x=>x.id==b.id))}catch(e){toast(e.message)}}
 
-async function loadBots(select) {
-  S.bots = await api("/api/bots");
-  if (select) S.bot = S.bots.find(b => b.id === select) || null;
-  else if (S.bot) S.bot = S.bots.find(b => b.id === S.bot.id) || null;
-  if (!S.bot && S.bots.length) S.bot = S.bots[0];
-  renderRail();
-  if (S.bot && !S.cmds.length) await loadCmds(); else renderMain();
-}
+function render(){({home:vHome,bots:vBots,ai:vAI,earn:vEarn,more:vMore}[S.page])()}
+function vHome(){const run=S.bots.filter(b=>b.running).length,u=S.bots.reduce((a,b)=>a+b.users,0);
+  frame(`<h2 class="page">Home</h2><div class="stats"><div><small>Bots</small><b>${S.bots.length}</b></div><div><small>Running</small><b class="g">${run}</b></div><div><small>Total users</small><b>${u}</b></div><div><small>Stopped</small><b class="o">${S.bots.length-run}</b></div></div>
+  ${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users</small></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Open the Bots tab to add one.</div>'}`);
+  document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)))}
+function vAI(){frame(`<h2 class="page">AI</h2><div class="card"><h4>AI assistant</h4><p>Describe a command in plain words and get Python code for it. This needs an AI provider key, which isn't connected to this panel yet.</p><div class="field"><input disabled placeholder="e.g. a /balance command that reads user data"></div></div>`)}
+function vEarn(){frame(`<h2 class="page">Earn</h2><div class="card"><h4>Earnings</h4><p>Monetization isn't part of this self-hosted panel, so there is nothing to earn or withdraw here.</p></div>`)}
+function vMore(){frame(`<h2 class="page">More</h2><button class="list-item" id="mAdd">${I.plus}<span class="grow"><b>Add a bot</b><small>Paste a token from @BotFather</small></span></button><a class="list-item" href="/logout" style="text-decoration:none;color:inherit">${I.arrow}<span class="grow"><b>Sign out</b></span></a>`);$("#mAdd").onclick=addBot}
+function vBots(){
+  if(!S.bot){frame(`<div class="row" style="margin-bottom:14px"><h2 class="page grow" style="margin:0">Your bots</h2><button class="btn sm" id="ab">${I.plus} Add bot</button></div>${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users</small></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Add the token of a bot you made with @BotFather.</div>'}`);
+    $("#ab").onclick=addBot;document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)));return}
+  if(S.cur!=null)return vEditor();
+  const T=[["manage","gear","Manage"],["admin","users","Admin"],["settings","sliders","Settings"]];
+  frame(`<div class="seg-row"><button class="circ" id="bk" aria-label="Back to bots">${I.back}</button><div class="seg">${T.map(([k,i,l])=>`<button data-t="${k}" class="${S.tab==k?"on":""}">${I[i]}<span>${l}</span></button>`).join("")}</div></div><div id="body"></div>`);
+  $("#bk").onclick=()=>{S.bot=null;render()};
+  document.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{S.tab=b.dataset.t;vBots()});
+  ({manage:tManage,admin:tAdmin,settings:tSettings}[S.tab])()}
 
-function renderRail() {
-  $("#bots").innerHTML = S.bots.map(b => `
-    <button class="bot" data-id="${b.id}" aria-current="${S.bot && S.bot.id === b.id}">
-      <span class="dot ${b.running ? "on" : ""}" title="${b.running ? "Running" : "Stopped"}"></span>
-      <span>${esc(b.name)}<small>@${esc(b.username)}</small></span>
-    </button>`).join("");
-  document.querySelectorAll(".bot").forEach(el => el.onclick = async () => {
-    S.bot = S.bots.find(b => b.id == el.dataset.id); S.cmds = []; S.cmd = null; renderRail(); await loadCmds();
-  });
-}
+function tManage(){const b=S.bot,B=$("#body");
+  const L=S.cmds.filter(c=>c.name.includes(S.q.toLowerCase()));
+  B.innerHTML=`<div class="card"><div class="row"><span class="dot ${b.running?"on":""}"></span><div class="grow"><b style="font-size:19px">${esc(b.name)}</b><div style="color:var(--mut)">@${esc(b.username)} · ${b.running?"Running":"Stopped"}</div></div><button class="btn sm ${b.running?"red":""}" id="tg">${b.running?"Stop":"Start"}</button></div></div>
+  <div class="field" style="margin-bottom:14px">${I.search}<input id="q" placeholder="Search commands" value="${esc(S.q)}"></div>
+  ${L.map(c=>`<button class="list-item" data-id="${c.id}"><span class="py">PY</span><span class="grow"><b style="font-family:var(--mono)">${esc(c.name)}</b><small>${c.code.split("\n").length} lines</small></span>${I.chev}</button>`).join("")||'<div class="empty">No commands found.</div>'}
+  <button class="fab" id="nc" aria-label="New command">${I.plus}</button>`;
+  $("#tg").onclick=async()=>{await api(`/api/bots/${b.id}/${b.running?"stop":"start"}`,"POST");setTimeout(loadBots,500)};
+  $("#q").oninput=e=>{S.q=e.target.value;tManage();$("#q").focus();$("#q").setSelectionRange(S.q.length,S.q.length)};
+  document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openCmd(+e.dataset.id));$("#nc").onclick=newCmd}
+async function newCmd(){const n=await ask("New command","Use /name for a command, * for any other text, or cb:data for a button press.","/help","Create command");if(!n)return;
+  try{const c=await api(`/api/bots/${S.bot.id}/commands`,"POST",{name:n});S.cmds=await api(`/api/bots/${S.bot.id}/commands`);openCmd(c.id)}catch(e){toast(e.message)}}
+function openCmd(id){if(!S.open.includes(id))S.open.push(id);S.cur=id;S.sheet=null;render()}
 
-async function loadCmds(keepId) {
-  S.cmds = await api(`/api/bots/${S.bot.id}/commands`);
-  S.cmd = S.cmds.find(c => c.id === (keepId ?? (S.cmd && S.cmd.id))) || S.cmds[0] || null;
-  renderMain();
-}
+/* ---------- editor ---------- */
+const KW="and|as|break|class|continue|def|elif|else|except|finally|for|from|if|import|in|is|lambda|not|or|pass|raise|return|try|while|with|yield";
+const RX=new RegExp(`(#.*$)|(f?"(?:\\\\.|[^"\\\\])*"|f?'(?:\\\\.|[^'\\\\])*')|\\b(${KW})\\b|\\b(True|False|None)\\b|\\b(\\d+(?:\\.\\d+)?)\\b|([A-Za-z_]\\w*)(?=\\()|([=!<>+\\-*/%]+)`,"g");
+function hlLine(l){let o="",i=0,m;RX.lastIndex=0;while((m=RX.exec(l))){o+=esc(l.slice(i,m.index));const t=esc(m[0]);
+  o+=m[1]?`<span class="c">${t}</span>`:m[2]?`<span class="s">${t}</span>`:m[3]?`<span class="k">${t}</span>`:m[4]||m[5]?`<span class="t">${t}</span>`:m[6]?`<span class="f">${t}</span>`:`<span class="o2">${t}</span>`;i=m.index+m[0].length}
+  return o+esc(l.slice(i))}
+const hlAll=v=>v.split("\n").map(l=>`<div${/:\s*(#.*)?$/.test(l)?' class="fold"':""}>${hlLine(l)||" "}</div>`).join("");
+function vEditor(){
+  const c=S.cmds.find(x=>x.id==S.cur);if(!c){S.cur=null;return vBots()}
+  c.draft??=c.code;c.h??=[c.draft];c.hi??=c.h.length-1;
+  frame(`<div class="tabs">${S.open.map(id=>{const t=S.cmds.find(x=>x.id==id);return t?`<div class="tab ${id==S.cur?"":"off"}" data-id="${id}"><span class="py">PY</span><span>${esc(t.name)}</span><button class="x" data-x="${id}" aria-label="Close ${esc(t.name)}">×</button></div>`:""}).join("")}<button class="addtab" id="nt" aria-label="New command">${I.plus}</button></div>
+  <div class="subbar">${I.code}<span>${esc(c.name)}</span><button class="ic" id="cp" aria-label="Copy code">${I.copy}</button><button class="ic" id="fd" aria-label="Find">${I.search}</button><button class="ic" id="rt" aria-label="Run test">${I.wand}</button></div>
+  <div class="toolbar"><button class="tb" id="un" aria-label="Undo">${I.undo}</button><button class="tb" id="re" aria-label="Redo">${I.redo}</button><span class="sep"></span><button class="tb" id="cp2" aria-label="Copy">${I.copy}</button><button class="tb" id="ps" aria-label="Paste">${I.paste}</button><span class="grow"></span><button class="tb w" id="bk2">${I.arrow}Back</button><button class="tb w" id="sv">${I.save}Save</button></div>
+  <div class="ed"><div class="hl" id="hl"></div><textarea id="ta" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="Python code"></textarea></div>
+  ${S.sheet?`<div class="sheet"><div class="row"><b class="grow">Test run</b><button class="btn ghost sm" id="sx">Close</button></div><pre>${S.sheet}</pre></div>`:""}`);
+  const ta=$("#ta"),hl=$("#hl");ta.value=c.draft;
+  const paint=()=>{hl.innerHTML=hlAll(ta.value);ta.style.height="auto";ta.style.height=Math.max(ta.scrollHeight,innerHeight*.6)+"px";$("#un").disabled=c.hi<=0;$("#re").disabled=c.hi>=c.h.length-1};
+  let last=0;const push=()=>{c.draft=ta.value;if(c.h[c.hi]===ta.value)return;if(Date.now()-last<700&&c.hi>0&&c.hi==c.h.length-1)c.h[c.hi]=ta.value;else{c.h=c.h.slice(0,c.hi+1);c.h.push(ta.value);c.hi++}last=Date.now()};
+  ta.oninput=()=>{push();paint()};
+  ta.onkeydown=e=>{const s=ta.selectionStart;
+    if(e.key=="Tab"){e.preventDefault();ta.setRangeText("    ",s,ta.selectionEnd,"end");ta.oninput()}
+    else if(e.key=="Enter"){e.preventDefault();const ln=ta.value.slice(0,s).split("\n").pop();const ind=ln.match(/^\s*/)[0]+(/:\s*$/.test(ln)?"    ":"");ta.setRangeText("\n"+ind,s,ta.selectionEnd,"end");ta.oninput()}
+    else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()=="s"){e.preventDefault();save()}};
+  const jump=d=>{c.hi+=d;c.draft=ta.value=c.h[c.hi];paint()};
+  $("#un").onclick=()=>jump(-1);$("#re").onclick=()=>jump(1);
+  const copy=async()=>{try{await navigator.clipboard.writeText(ta.value);toast("Copied")}catch{toast("Copy isn't allowed in this browser")}};
+  $("#cp").onclick=copy;$("#cp2").onclick=copy;
+  $("#ps").onclick=async()=>{try{const t=await navigator.clipboard.readText();ta.setRangeText(t,ta.selectionStart,ta.selectionEnd,"end");ta.oninput()}catch{toast("Paste isn't allowed in this browser")}};
+  $("#fd").onclick=async()=>{const q=await ask("Find in code","","Text to find","Find");if(!q)return;const i=ta.value.indexOf(q);if(i<0)return toast("Not found");ta.focus();ta.setSelectionRange(i,i+q.length)};
+  async function save(){try{const r=await api(`/api/commands/${c.id}`,"PUT",{name:c.name,code:ta.value});c.code=r.code;c.draft=r.code;toast("Saved")}catch(e){toast(e.message)}}
+  $("#sv").onclick=save;$("#bk2").onclick=()=>{S.cur=null;S.sheet=null;render()};
+  $("#nt").onclick=newCmd;
+  document.querySelectorAll(".tab").forEach(t=>t.onclick=e=>{if(e.target.dataset.x)return;S.cur=+t.dataset.id;S.sheet=null;render()});
+  document.querySelectorAll("[data-x]").forEach(x=>x.onclick=()=>{const id=+x.dataset.x;S.open=S.open.filter(i=>i!=id);if(S.cur==id)S.cur=S.open.at(-1)??null;render()});
+  $("#rt").onclick=async()=>{S.sheet="Running…";vEditor();try{const r=await api(`/api/commands/${c.id}/test`,"POST",{code:ta.value,text:c.name.startsWith("/")?c.name:""});let h="";
+    r.actions.forEach(a=>{const p=a.params;h+=`→ ${esc(a.method)}  ${esc(p.text||p.caption||p.photo||p.document||JSON.stringify(p))}\n`});
+    if(r.pending)h+=`waiting for next message → ${esc(r.pending)}\n`;if(r.stdout)h+=`print:\n${esc(r.stdout)}\n`;if(r.error)h+=`<span style="color:#fca5a5">${esc(r.error)}</span>`;
+    S.sheet=h||"The command ran and sent nothing. Nothing is sent to Telegram in a test."}catch(e){S.sheet=esc(e.message)}vEditor()};
+  if(S.sheet&&$("#sx"))$("#sx").onclick=()=>{S.sheet=null;vEditor()};
+  paint()}
 
-function renderMain() {
-  clearInterval(S.timer);
-  const m = $("#main");
-  if (!S.bot) {
-    m.innerHTML = `<div class="empty"><h2>No bots yet</h2>
-      <p>Add your first Telegram bot token to start writing commands in Python.</p>
-      <button class="btn primary" onclick="$('#addBot').click()">Add a bot</button></div>`;
-    return;
-  }
-  const b = S.bot;
-  m.innerHTML = `
-    <div class="top">
-      <h2>${esc(b.name)}</h2><span class="meta">@${esc(b.username)} · ${b.users} user${b.users === 1 ? "" : "s"} · token ending ${esc(b.token_hint)}</span>
-      <span class="grow"></span>
-      <button class="btn ${b.running ? "" : "primary"}" id="toggle">${b.running ? "Stop bot" : "Start bot"}</button>
-      <button class="btn danger" id="delBot">Remove bot</button>
-    </div>
-    <div class="tabs" role="tablist">
-      ${["commands", "logs", "help"].map(t => `<button class="tab" role="tab" data-t="${t}" aria-selected="${S.tab === t}">${{ commands: "Commands", logs: "Logs", help: "Python API" }[t]}</button>`).join("")}
-    </div>
-    <div class="pane" id="pane"></div>`;
-  $("#toggle").onclick = async () => {
-    await api(`/api/bots/${b.id}/${b.running ? "stop" : "start"}`, "POST");
-    setTimeout(() => loadBots(), 400);
-  };
-  $("#delBot").onclick = async () => {
-    if (!confirm(`Remove ${b.name} and all its commands and data? This can't be undone.`)) return;
-    await api(`/api/bots/${b.id}`, "DELETE"); S.bot = null; S.cmds = []; S.cmd = null; await loadBots();
-  };
-  document.querySelectorAll(".tab").forEach(t => t.onclick = () => { S.tab = t.dataset.t; renderMain(); });
-  ({ commands: renderCommands, logs: renderLogs, help: renderHelp }[S.tab])();
-}
+/* ---------- admin ---------- */
+function tAdmin(){const B=$("#body"),id=S.bot.id;const subs=[["stats","Stats"],["users","Users"],["broadcasts","Broadcasts"],["botdata","Bot Data"],["userdata","User Data"]];
+  B.innerHTML=`<div class="pills">${subs.map(([k,l])=>`<button data-s="${k}" class="${S.sub==k?"on":""}">${l}</button>`).join("")}</div><div id="sb"></div>`;
+  document.querySelectorAll(".pills button").forEach(b=>b.onclick=()=>{S.sub=b.dataset.s;tAdmin()});const sb=$("#sb");
+  if(S.sub=="stats")api(`/api/bots/${id}/stats`).then(s=>{const mx=Math.max(1,...s.commands.map(c=>c.lines));
+    sb.innerHTML=`<div class="stats"><div><small>Total Users</small><b>${s.total}</b></div><div><small>Active (24h)</small><b class="g">${s.active[1]}</b></div><div><small>Active (7d)</small><b>${s.active[7]}</b></div><div><small>Active (30d)</small><b>${s.active[30]}</b></div><div><small>New (24h)</small><b class="g">${s.new[1]}</b><em>joined today</em></div><div><small>New (7d)</small><b class="o">${s.new[7]}</b></div><div><small>New (30d)</small><b class="o">${s.new[30]}</b></div><div><small>Blocked</small><b class="r">${s.blocked}</b></div></div>
+    <div class="card"><h4>Commands (${s.commands.length})</h4>${s.commands.map(c=>`<div class="cmd"><span class="n"><i></i>${esc(c.name)}</span><span class="l">${c.lines} lines</span><span class="bar"><span style="width:${Math.max(3,c.lines/mx*100)}%"></span></span></div>`).join("")}</div>`});
+  if(S.sub=="users"){sb.innerHTML=`<div class="field" style="margin-bottom:14px">${I.search}<input id="uq" placeholder="Search by name, @username or ID"></div><div id="ul"></div>`;
+    const load=()=>api(`/api/bots/${id}/users?q=${encodeURIComponent($("#uq").value)}`).then(u=>{$("#ul").innerHTML=u.map(x=>`<div class="list-item" style="cursor:default"><span class="grow"><b>${esc(x.first_name||"Unknown")} ${x.blocked?'<span class="badge">blocked</span>':""}</b><small>${x.username?"@"+esc(x.username)+" · ":""}${x.user_id} · active ${ago(x.last_seen)}</small></span></div>`).join("")||'<div class="empty">No users yet.</div>'});
+    $("#uq").oninput=load;load()}
+  if(S.sub=="broadcasts"){sb.innerHTML=`<div class="card"><h4>New broadcast</h4><p>Sends to every user who hasn't blocked the bot. HTML like &lt;b&gt;bold&lt;/b&gt; works.</p><textarea class="paste" id="bt" placeholder="Write your message…"></textarea><button class="btn full" id="bs">${I.up} Send to all users</button></div><div id="bl"></div>`;
+    const load=()=>api(`/api/bots/${id}/broadcasts`).then(l=>{if($("#bl"))$("#bl").innerHTML=l.map(x=>`<div class="card"><h4>${new Date(x.ts*1e3).toLocaleString()} · ${esc(x.status)}</h4><p style="margin:0">${esc(x.text.slice(0,140))}</p><div style="color:var(--mut);margin-top:8px">${x.sent} sent · ${x.failed} failed · ${x.total} users</div></div>`).join("")});
+    $("#bs").onclick=async()=>{const t=$("#bt").value;if(!t.trim())return toast("Write a message first.");if(!confirm("Send this message to all users?"))return;try{await api(`/api/bots/${id}/broadcasts`,"POST",{text:t});$("#bt").value="";toast("Broadcast started");load()}catch(e){toast(e.message)}};load()}
+  if(S.sub=="botdata")kvView(sb,"bot");
+  if(S.sub=="userdata"){api(`/api/bots/${id}/kv_users`).then(u=>{sb.innerHTML=u.map(x=>`<button class="list-item" data-u="${x.user_id}"><span class="grow"><b>${esc(x.first_name||"User")} </b><small>${x.user_id} · ${x.n} key${x.n==1?"":"s"}</small></span>${I.chev}</button>`).join("")||'<div class="empty">No user data saved yet.</div>';
+    document.querySelectorAll("[data-u]").forEach(e=>e.onclick=()=>{sb.innerHTML=`<button class="btn ghost sm" id="ub" style="margin-bottom:14px">${I.arrow} All users</button><div id="kb"></div>`;$("#ub").onclick=tAdmin;kvView($("#kb"),"user:"+e.dataset.u)})})}}
+function kvView(el,scope){const id=S.bot.id;api(`/api/bots/${id}/kv?scope=${encodeURIComponent(scope)}`).then(d=>{const ks=Object.keys(d);
+  el.innerHTML=`<div class="card">${ks.map(k=>`<div class="kv"><b>${esc(k)}</b><textarea data-k="${esc(k)}">${esc(JSON.stringify(d[k],null,2))}</textarea><div class="act"><button class="btn sm" data-sv="${esc(k)}">Save</button><button class="btn red sm" data-dl="${esc(k)}">Delete</button></div></div>`).join("")||'<div class="empty">Nothing stored yet.</div>'}</div>
+  <div class="card"><h4>Add a value</h4><div class="field" style="margin-bottom:10px"><input id="nk" placeholder="key"></div><div class="field" style="margin-bottom:10px"><input id="nv" placeholder='value, e.g. 10 or "text"'></div><button class="btn full" id="na">${I.plus} Add</button></div>`;
+  const put=async(k,v)=>{try{await api(`/api/bots/${id}/kv`,"PUT",{scope,key:k,value:v});toast("Saved");kvView(el,scope)}catch(e){toast(e.message)}};
+  el.querySelectorAll("[data-sv]").forEach(b=>b.onclick=()=>put(b.dataset.sv,el.querySelector(`textarea[data-k="${CSS.escape(b.dataset.sv)}"]`).value));
+  el.querySelectorAll("[data-dl]").forEach(b=>b.onclick=async()=>{if(!confirm(`Delete ${b.dataset.dl}?`))return;await api(`/api/bots/${id}/kv?scope=${encodeURIComponent(scope)}&key=${encodeURIComponent(b.dataset.dl)}`,"DELETE");kvView(el,scope)});
+  $("#na").onclick=()=>{const k=$("#nk").value.trim();if(!k)return toast("Enter a key.");put(k,$("#nv").value)}})}
 
-function renderCommands() {
-  const c = S.cmd;
-  $("#pane").innerHTML = `<div class="cmds">
-    <div class="list">
-      ${S.cmds.map(x => `<button class="item" data-id="${x.id}" aria-current="${c && c.id === x.id}">${esc(x.name)}</button>`).join("")}
-      <button class="btn" id="newCmd">New command</button>
-    </div>
-    <div class="editor">${c ? `
-      <div class="edbar">
-        <input id="cname" value="${esc(c.name)}" aria-label="Command name">
-        <button class="btn primary" id="save">Save</button>
-        <button class="btn danger" id="delCmd">Delete</button>
-        <span class="hint" id="saveHint">Ctrl/⌘+S saves. Restart isn't needed.</span>
-      </div>
-      <textarea class="code" id="code" spellcheck="false" aria-label="Python code">${esc(c.code)}</textarea>
-      <div class="test">
-        <div class="row">
-          <input id="testText" placeholder="Test input, e.g. /start or a message" value="${esc(c.name.startsWith("/") ? c.name : "")}">
-          <button class="btn" id="runTest">Run test</button>
-          <span class="hint">Nothing is sent to Telegram and no data is saved.</span>
-        </div>
-        <pre class="out" id="out"></pre>
-      </div>` : `<div class="empty"><h2>No commands</h2><p>Create a command to tell your bot what to do.</p></div>`}
-    </div></div>`;
-  document.querySelectorAll(".item").forEach(el => el.onclick = () => { S.cmd = S.cmds.find(x => x.id == el.dataset.id); renderCommands(); });
-  $("#newCmd").onclick = () => { $("#cmdIn").value = ""; $("#cmdMsg").textContent = ""; $("#dlgCmd").showModal(); $("#cmdIn").focus(); };
-  if (!c) return;
+/* ---------- settings ---------- */
+function tSettings(){const b=S.bot,B=$("#body"),id=b.id,botId=b.token_hint?"":"";
+  B.innerHTML=`<div class="card"><h4>Bot ID</h4><div class="field"><input readonly id="bid" value="…"><button class="ic" id="cb" aria-label="Copy bot ID">${I.paste}</button></div></div>
+  <div class="card"><h4>Bot token</h4><div class="field mono"><input readonly id="tk" value="${"•".repeat(30)}"><button class="ic" id="ct" aria-label="Copy token">${I.paste}</button><button class="ic" id="et" aria-label="Show token">${I.eye}</button></div></div>
+  <div class="card"><div class="row"><div class="grow"><h4>Auto-translate (92 languages)</h4><p style="margin:0">Messages are translated and delivered in each user's own language. Users can pick their language via libs.translate.setLang.</p></div><button class="toggle" id="tr" aria-label="Auto-translate"></button></div></div>
+  <div class="card"><h4>Update token</h4><div class="act"><div class="field"><input id="nt2" placeholder="New token" autocomplete="off"></div><button class="btn dim" id="ut">Update</button></div></div>
+  <div class="card"><h4>Transfer bot</h4><div class="act"><div class="field"><input id="em" placeholder="Recipient email"></div><button class="btn dim" id="tf">Transfer</button></div></div>
+  <div class="card"><h4>Clone bot</h4><p>Duplicate this bot with all commands and settings.</p><button class="btn full" id="cl">Clone</button></div>
+  <div class="card"><h4>Import users</h4><p>Upload a JSON, CSV or TXT with Telegram user IDs: our export or another platform's. Every ID is checked with Telegram through this bot and only users it can reach are added, about 10 a second, so a big list takes hours. You can leave this page.</p><div class="file"><label class="btn">Choose file<input type="file" id="uf" accept=".json,.csv,.txt"></label><span id="un2">No file chosen</span></div></div>
+  <div class="card"><h4>Export bot</h4><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="ef" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><label class="chk"><input type="checkbox" id="eo">Commands Only</label><label class="chk"><input type="checkbox" id="ed">Include Bot Data</label><button class="btn full" id="ex">${I.down} Export</button></div>
+  <div class="card"><h4>Import commands</h4><p>Upload or paste an exported bot file (JSON / YAML / TXT). Existing commands are updated, new ones added — ideal for editing your bot with AI, then re-uploading.</p><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="if" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><div class="file"><label class="btn">Choose file<input type="file" id="cf" accept=".json,.yaml,.yml,.txt"></label><span id="cn">No file chosen</span></div><textarea class="paste" id="cx" placeholder="…or paste your exported commands here"></textarea><label class="chk"><input type="checkbox" id="rp">Replace all existing commands</label><button class="btn full" id="im">${I.up} Import</button></div>`;
+  api(`/api/bots/${id}/token`).then(r=>{$("#bid").value=r.token.split(":")[0];S.tokV=r.token;});
+  api(`/api/bots/${id}/translate`).then(r=>$("#tr").classList.toggle("on",r.translate));
+  const clip=async t=>{try{await navigator.clipboard.writeText(t);toast("Copied")}catch{toast("Copy isn't allowed in this browser")}};
+  $("#cb").onclick=()=>clip($("#bid").value);$("#ct").onclick=()=>clip(S.tokV||"");
+  $("#et").onclick=()=>{const on=$("#tk").value.startsWith("•");$("#tk").value=on?S.tokV:"•".repeat(30);$("#et").innerHTML=on?I.eyeoff:I.eye};
+  $("#tr").onclick=async e=>{const on=!e.currentTarget.classList.contains("on");e.currentTarget.classList.toggle("on",on);await api(`/api/bots/${id}/settings`,"POST",{translate:on});toast(on?"Auto-translate saved as on":"Auto-translate saved as off")};
+  $("#ut").onclick=async()=>{try{await api(`/api/bots/${id}/token`,"POST",{token:$("#nt2").value});toast("Token updated");$("#nt2").value="";tSettings()}catch(e){toast(e.message)}};
+  $("#tf").onclick=async()=>{try{await api(`/api/bots/${id}/transfer`,"POST",{email:$("#em").value})}catch(e){toast(e.message)}};
+  $("#cl").onclick=async()=>{const t=await ask("Clone bot","Paste the token of the new bot that will receive a copy of everything.","123456:ABC-DEF…","Clone");if(!t)return;try{await api(`/api/bots/${id}/clone`,"POST",{token:t});toast("Bot cloned");await loadBots()}catch(e){toast(e.message)}};
+  $("#uf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#un2").textContent=f.name;try{const r=await api(`/api/bots/${id}/import_users`,"POST",{content:await f.text()});toast(`Checking ${r.count} user IDs in the background`)}catch(x){toast(x.message)}};
+  $("#ex").onclick=()=>{const f=document.querySelector('input[name=ef]:checked').value;location.href=`/api/bots/${id}/export?format=${f}&commands_only=${$("#eo").checked?1:0}&bot_data=${$("#ed").checked?1:0}`};
+  $("#cf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#cn").textContent=f.name;$("#cx").value=await f.text();const x=f.name.split(".").pop();document.querySelector(`input[name=if][value=${x=="yml"?"yaml":["json","yaml","txt"].includes(x)?x:"json"}]`).checked=true};
+  $("#im").onclick=async()=>{const t=$("#cx").value;if(!t.trim())return toast("Choose a file or paste your commands first.");if($("#rp").checked&&!confirm("Replace ALL existing commands with the imported ones?"))return;
+    try{const r=await api(`/api/bots/${id}/import`,"POST",{format:document.querySelector('input[name=if]:checked').value,content:t,replace:$("#rp").checked});toast(`${r.added} added, ${r.updated} updated`);$("#cx").value="";S.cmds=await api(`/api/bots/${id}/commands`)}catch(e){toast(e.message)}}}
 
-  const code = $("#code");
-  code.addEventListener("keydown", e => {
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const s = code.selectionStart;
-      code.setRangeText("    ", s, code.selectionEnd, "end");
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
-  });
-  async function save() {
-    try {
-      const r = await api(`/api/commands/${c.id}`, "PUT", { name: $("#cname").value, code: code.value });
-      Object.assign(c, r); $("#saveHint").textContent = "Saved."; await loadCmds(c.id);
-    } catch (e) { $("#saveHint").textContent = e.message; }
-  }
-  $("#save").onclick = save;
-  $("#delCmd").onclick = async () => {
-    if (!confirm(`Delete ${c.name}?`)) return;
-    await api(`/api/commands/${c.id}`, "DELETE"); S.cmd = null; await loadCmds();
-  };
-  $("#runTest").onclick = async () => {
-    const out = $("#out"); out.textContent = "Running…";
-    try {
-      const r = await api(`/api/commands/${c.id}/test`, "POST", { code: code.value, text: $("#testText").value });
-      let h = "";
-      r.actions.forEach(a => {
-        const p = a.params; const body = p.text || p.caption || p.photo || p.document || JSON.stringify(p);
-        h += `<span class="act">→ ${esc(a.method)}</span> ${esc(body)}\n`;
-        if (p.reply_markup) h += `<span class="mut">   buttons: ${esc(JSON.stringify(p.reply_markup))}</span>\n`;
-      });
-      if (r.pending) h += `<span class="mut">waiting for the user's next message → ${esc(r.pending)}</span>\n`;
-      if (r.stdout) h += `<span class="mut">print output:</span>\n${esc(r.stdout)}\n`;
-      if (r.error) h += `<span class="bad">${esc(r.error)}</span>`;
-      if (!h) h = `<span class="mut">The command ran and sent nothing.</span>`;
-      out.innerHTML = h;
-    } catch (e) { out.innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
-  };
-}
-
-async function renderLogs() {
-  const draw = async () => {
-    const pane = $("#pane"); if (!pane || S.tab !== "logs") return;
-    const L = await api(`/api/bots/${S.bot.id}/logs`);
-    pane.innerHTML = `<div class="logs">${L.length ? L.map(l =>
-      `<div class="logline lv-${esc(l.level)}">${new Date(l.ts * 1000).toLocaleTimeString()}  ${esc(l.level)}  ${esc(l.text)}</div>`).join("")
-      : `<span class="lv-info">Nothing logged yet. Start the bot and send it a message.</span>`}</div>`;
-  };
-  await draw(); S.timer = setInterval(draw, 4000);
-}
-
-function renderHelp() {
-  $("#pane").innerHTML = `<div class="help">
-  <h2>Writing commands in Python</h2>
-  <p>Each command is a plain Python script. It runs in its own process every time it's triggered and is stopped after 10 seconds.</p>
-  <h3>When a command runs</h3>
-  <p><code>/start</code> runs for that slash command. <code>*</code> runs for any other text. <code>cb:data</code> runs when a button with that data is pressed (<code>cb:*</code> catches the rest).</p>
-  <h3>What's in scope</h3>
-  <pre><code>text      # full message text
-args      # list of words after the command
-data      # button data (for cb: commands)
-message   # the Telegram message (message.text, message["chat"]["id"])
-chat      # chat.id, chat.type
-user      # user.id, user.first_name, user.username
-bot       # your bot
-requests  # HTTP library</code></pre>
-  <h3>Sending</h3>
-  <pre><code>bot.send("Hello")                       # message to the current chat
-bot.reply("Hi", parse_mode="HTML")       # reply to the user's message
-bot.send("Pick one", inline=[[("Yes", "yes"), ("Docs", "https://example.com")]])
-bot.send("Menu", keyboard=[["Help", "About"]])
-bot.photo("https://…/pic.jpg", caption="Look")
-bot.document("https://…/file.pdf")
-bot.edit("New text")                     # edit the message of a pressed button
-bot.answer("Saved", alert=False)         # answer a button press
-bot.call("sendDice", chat_id=chat.id)    # any Bot API method</code></pre>
-  <h3>Remembering things</h3>
-  <pre><code>user.save("score", 10)     # stored per user
-user.get("score", 0)
-bot.save("total", 5)       # stored for the whole bot
-bot.get("total", 0)
-user.delete("score")</code></pre>
-  <p>Values must be JSON-friendly: numbers, text, lists, dicts, true/false.</p>
-  <h3>Asking a question</h3>
-  <pre><code>bot.send("What's your name?")
-wait_next("/got_name")     # the user's next message runs /got_name</code></pre>
-  <h3>Heads-up</h3>
-  <p>Command code can do anything Python can do on the machine running Botbench. Only give panel access to people you trust.</p>
-  </div>`;
-}
-
-// dialogs
-$("#addBot").onclick = () => { $("#tokenIn").value = ""; $("#tokenMsg").textContent = ""; $("#dlgBot").showModal(); $("#tokenIn").focus(); };
-$("#tokenCancel").onclick = () => $("#dlgBot").close();
-$("#tokenOk").onclick = async () => {
-  $("#tokenMsg").textContent = "Checking token…";
-  try {
-    const b = await api("/api/bots", "POST", { token: $("#tokenIn").value });
-    $("#dlgBot").close(); S.cmds = []; S.cmd = null; await loadBots(b.id);
-  } catch (e) { $("#tokenMsg").textContent = e.message; }
-};
-$("#cmdCancel").onclick = () => $("#dlgCmd").close();
-$("#cmdOk").onclick = async () => {
-  try {
-    const c = await api(`/api/bots/${S.bot.id}/commands`, "POST", { name: $("#cmdIn").value });
-    $("#dlgCmd").close(); S.tab = "commands"; await loadCmds(c.id);
-  } catch (e) { $("#cmdMsg").textContent = e.message; }
-};
-["tokenIn", "cmdIn"].forEach(id => $("#" + id).addEventListener("keydown", e => {
-  if (e.key === "Enter") $(id === "tokenIn" ? "#tokenOk" : "#cmdOk").click();
-}));
-
-loadBots();
+loadBots();setInterval(()=>{if(S.page=="bots"&&S.bot&&S.cur==null&&S.tab=="manage"&&!document.activeElement.matches("input"))api("/api/bots").then(b=>{S.bots=b;S.bot=b.find(x=>x.id==S.bot.id)||S.bot})},15000);
 </script>
 </body>
 </html>

@@ -1,4 +1,5 @@
-import os, secrets, hmac
+import os, secrets, hmac, re, json, time, threading
+import yaml
 import jinja2
 from functools import wraps
 from flask import Flask, request, jsonify, session, render_template, redirect, send_from_directory
@@ -179,6 +180,233 @@ def test_command(cid):
 def logs(bid):
     return jsonify(core.rows("SELECT ts, level, text FROM logs WHERE bot_id=? "
                              "ORDER BY id DESC LIMIT 150", (bid,)))
+
+
+# ---------- admin: stats, users, broadcasts ----------
+def _bot(bid):
+    return core.one("SELECT * FROM bots WHERE id=?", (bid,))
+
+
+@app.get("/api/bots/<int:bid>/stats")
+@auth
+def stats(bid):
+    now = time.time()
+    day = 86400
+
+    def n(where, *args):
+        return core.one(f"SELECT COUNT(*) c FROM users WHERE bot_id=? AND {where}", (bid, *args))["c"]
+    cmds = core.rows("SELECT name, code FROM commands WHERE bot_id=? ORDER BY name", (bid,))
+    return jsonify(
+        total=n("1=1"), blocked=n("COALESCE(blocked,0)=1"),
+        active={d: n("last_seen>=?", now - d * day) for d in (1, 7, 30)},
+        new={d: n("first_seen>=?", now - d * day) for d in (1, 7, 30)},
+        commands=[{"name": c["name"], "lines": len(c["code"].splitlines())} for c in cmds])
+
+
+@app.get("/api/bots/<int:bid>/users")
+@auth
+def users(bid):
+    q = "%" + (request.args.get("q") or "") + "%"
+    return jsonify(core.rows(
+        "SELECT user_id, first_name, username, last_seen, COALESCE(blocked,0) blocked FROM users "
+        "WHERE bot_id=? AND (CAST(user_id AS TEXT) LIKE ? OR first_name LIKE ? OR username LIKE ?) "
+        "ORDER BY last_seen DESC LIMIT 200", (bid, q, q, q)))
+
+
+@app.get("/api/bots/<int:bid>/broadcasts")
+@auth
+def broadcasts(bid):
+    return jsonify(core.rows("SELECT * FROM broadcasts WHERE bot_id=? ORDER BY id DESC LIMIT 30", (bid,)))
+
+
+@app.post("/api/bots/<int:bid>/broadcasts")
+@auth
+def broadcast(bid):
+    text = (request.json.get("text") or "").strip()
+    if not text:
+        return jsonify(error="Write a message first."), 400
+    core.send_broadcast(_bot(bid), text)
+    return jsonify(ok=True)
+
+
+@app.post("/api/bots/<int:bid>/import_users")
+@auth
+def import_users(bid):
+    raw = request.json.get("content") or ""
+    ids = sorted({int(x) for x in re.findall(r"\b\d{5,15}\b", raw)})
+    if not ids:
+        return jsonify(error="No Telegram user IDs found in that file."), 400
+    core.import_users(_bot(bid), ids)
+    return jsonify(count=len(ids))
+
+
+# ---------- admin: bot data / user data ----------
+@app.get("/api/bots/<int:bid>/kv")
+@auth
+def kv_list(bid):
+    scope = request.args.get("scope", "bot")
+    return jsonify(core.kv_all(bid, scope))
+
+
+@app.get("/api/bots/<int:bid>/kv_users")
+@auth
+def kv_users(bid):
+    return jsonify(core.rows(
+        "SELECT REPLACE(k.scope,'user:','') user_id, u.first_name, u.username, COUNT(*) n FROM kv k "
+        "LEFT JOIN users u ON u.bot_id=k.bot_id AND CAST(u.user_id AS TEXT)=REPLACE(k.scope,'user:','') "
+        "WHERE k.bot_id=? AND k.scope LIKE 'user:%' GROUP BY k.scope ORDER BY n DESC LIMIT 200", (bid,)))
+
+
+@app.put("/api/bots/<int:bid>/kv")
+@auth
+def kv_put(bid):
+    j = request.json
+    try:
+        val = json.loads(j.get("value"))
+    except Exception:
+        val = j.get("value")
+    core.kv_apply(bid, j["scope"], {j["key"]: val})
+    return jsonify(ok=True)
+
+
+@app.delete("/api/bots/<int:bid>/kv")
+@auth
+def kv_del(bid):
+    core.kv_apply(bid, request.args["scope"], {request.args["key"]: None})
+    return jsonify(ok=True)
+
+
+# ---------- settings ----------
+@app.get("/api/bots/<int:bid>/token")
+@auth
+def get_token(bid):
+    return jsonify(token=_bot(bid)["token"])
+
+
+@app.post("/api/bots/<int:bid>/token")
+@auth
+def update_token(bid):
+    token = (request.json.get("token") or "").strip()
+    b = _bot(bid)
+    try:
+        me = core.tg(token, "getMe")
+    except Exception as e:
+        return jsonify(error=f"Telegram rejected this token: {e}"), 400
+    if token.split(":")[0] != b["token"].split(":")[0]:
+        return jsonify(error="That token belongs to a different bot."), 400
+    was = core.is_running(bid)
+    core.stop_bot(bid)
+    core.run("UPDATE bots SET token=?, name=?, username=? WHERE id=?",
+             (token, me.get("first_name"), me.get("username"), bid))
+    if was:
+        core.start_bot(bid)
+    return jsonify(ok=True)
+
+
+@app.post("/api/bots/<int:bid>/settings")
+@auth
+def settings(bid):
+    core.run("UPDATE bots SET translate=? WHERE id=?", (1 if request.json.get("translate") else 0, bid))
+    return jsonify(ok=True)
+
+
+@app.get("/api/bots/<int:bid>/translate")
+@auth
+def get_translate(bid):
+    return jsonify(translate=bool(_bot(bid)["translate"]))
+
+
+@app.post("/api/bots/<int:bid>/transfer")
+@auth
+def transfer(bid):
+    return jsonify(error="Transfers need separate panel accounts, and this panel has a single owner login."), 400
+
+
+@app.post("/api/bots/<int:bid>/clone")
+@auth
+def clone(bid):
+    token = (request.json.get("token") or "").strip()
+    if core.one("SELECT 1 FROM bots WHERE token=?", (token,)):
+        return jsonify(error="That bot is already in the panel."), 400
+    try:
+        me = core.tg(token, "getMe")
+    except Exception as e:
+        return jsonify(error=f"Telegram rejected this token: {e}"), 400
+    nb = core.run("INSERT INTO bots(name, username, token) VALUES(?,?,?)",
+                  (me.get("first_name"), me.get("username"), token))
+    for c in core.rows("SELECT name, code FROM commands WHERE bot_id=?", (bid,)):
+        core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)", (nb, c["name"], c["code"]))
+    core.kv_apply(nb, "bot", core.kv_all(bid, "bot"))
+    return jsonify(id=nb)
+
+
+# ---------- export / import commands ----------
+def _str_rep(d, s):
+    return d.represent_scalar("tag:yaml.org,2002:str", s, style="|" if "\n" in s else None)
+
+
+yaml.add_representer(str, _str_rep, Dumper=yaml.SafeDumper)
+
+
+@app.get("/api/bots/<int:bid>/export")
+@auth
+def export(bid):
+    fmt = request.args.get("format", "json")
+    b = _bot(bid)
+    cmds = [{"name": c["name"], "code": c["code"]} for c in
+            core.rows("SELECT name, code FROM commands WHERE bot_id=? ORDER BY name", (bid,))]
+    doc = {"commands": cmds}
+    if request.args.get("commands_only") != "1":
+        doc = {"bot": {"name": b["name"], "username": b["username"]}, **doc}
+    if request.args.get("bot_data") == "1":
+        doc["bot_data"] = core.kv_all(bid, "bot")
+    if fmt == "yaml":
+        body = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+    elif fmt == "txt":
+        body = "".join(f"### {c['name']}\n{c['code'].rstrip()}\n\n" for c in cmds)
+        if "bot_data" in doc:
+            body += "### @bot_data\n" + json.dumps(doc["bot_data"], indent=2) + "\n"
+    else:
+        fmt, body = "json", json.dumps(doc, indent=2, ensure_ascii=False)
+    return app.response_class(body, mimetype="text/plain", headers={
+        "Content-Disposition": f'attachment; filename="{b["username"]}_export.{fmt}"'})
+
+
+@app.post("/api/bots/<int:bid>/import")
+@auth
+def import_cmds(bid):
+    j = request.json
+    fmt, text = j.get("format", "json"), j.get("content") or ""
+    try:
+        if fmt == "txt":
+            parts = re.split(r"(?m)^### (.+)$", text)
+            data = {"commands": [], "bot_data": None}
+            for name, code in zip(parts[1::2], parts[2::2]):
+                if name.strip() == "@bot_data":
+                    data["bot_data"] = json.loads(code)
+                else:
+                    data["commands"].append({"name": name.strip(), "code": code.strip("\n") + "\n"})
+        else:
+            data = yaml.safe_load(text) if fmt == "yaml" else json.loads(text)
+        cmds = data["commands"]
+    except Exception as e:
+        return jsonify(error=f"Couldn't read that file as {fmt.upper()}: {e}"), 400
+    if j.get("replace"):
+        core.run("DELETE FROM commands WHERE bot_id=?", (bid,))
+    added = updated = 0
+    for c in cmds:
+        name = norm_name(c.get("name"))
+        if not name:
+            continue
+        if core.one("SELECT 1 FROM commands WHERE bot_id=? AND name=?", (bid, name)):
+            core.run("UPDATE commands SET code=? WHERE bot_id=? AND name=?", (c.get("code", ""), bid, name))
+            updated += 1
+        else:
+            core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)", (bid, name, c.get("code", "")))
+            added += 1
+    if data.get("bot_data"):
+        core.kv_apply(bid, "bot", data["bot_data"])
+    return jsonify(added=added, updated=updated)
 
 
 if __name__ == "__main__":

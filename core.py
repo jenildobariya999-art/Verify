@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS commands(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id
 CREATE TABLE IF NOT EXISTS kv(bot_id INTEGER, scope TEXT, k TEXT, v TEXT, PRIMARY KEY(bot_id, scope, k));
 CREATE TABLE IF NOT EXISTS pending(bot_id INTEGER, user_id INTEGER, command TEXT, PRIMARY KEY(bot_id, user_id));
 CREATE TABLE IF NOT EXISTS users(bot_id INTEGER, user_id INTEGER, PRIMARY KEY(bot_id, user_id));
+CREATE TABLE IF NOT EXISTS broadcasts(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, ts REAL,
+  text TEXT, total INTEGER, sent INTEGER, failed INTEGER, status TEXT);
 CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, ts REAL, level TEXT, text TEXT);
 """
 
@@ -70,6 +72,66 @@ def init_db():
         c.executescript(SCHEMA)
         c.commit()
         c.close()
+    for sql in ["ALTER TABLE users ADD COLUMN first_name TEXT", "ALTER TABLE users ADD COLUMN username TEXT",
+                "ALTER TABLE users ADD COLUMN first_seen REAL", "ALTER TABLE users ADD COLUMN last_seen REAL",
+                "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
+                "ALTER TABLE bots ADD COLUMN translate INTEGER DEFAULT 0"]:
+        try:
+            run(sql)
+        except sqlite3.OperationalError:
+            pass
+
+
+def touch_user(bid, u):
+    now = time.time()
+    run("INSERT OR IGNORE INTO users(bot_id, user_id, first_seen) VALUES(?,?,?)", (bid, u["id"], now))
+    run("UPDATE users SET first_name=COALESCE(?,first_name), username=COALESCE(?,username), last_seen=?, "
+        "blocked=0, first_seen=COALESCE(first_seen,?) WHERE bot_id=? AND user_id=?",
+        (u.get("first_name"), u.get("username"), now, now, bid, u["id"]))
+
+
+def _is_blocked(err):
+    e = str(err).lower()
+    return "blocked" in e or "deactivated" in e or "chat not found" in e
+
+
+def send_broadcast(bot, text, parse_mode="HTML"):
+    uids = [r["user_id"] for r in rows(
+        "SELECT user_id FROM users WHERE bot_id=? AND COALESCE(blocked,0)=0", (bot["id"],))]
+    bc = run("INSERT INTO broadcasts(bot_id, ts, text, total, sent, failed, status) VALUES(?,?,?,?,0,0,'sending')",
+             (bot["id"], time.time(), text, len(uids)))
+
+    def work():
+        s = f = 0
+        for uid in uids:
+            try:
+                tg(bot["token"], "sendMessage", chat_id=uid, text=text, parse_mode=parse_mode)
+                s += 1
+            except Exception as e:
+                f += 1
+                if _is_blocked(e):
+                    run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bot["id"], uid))
+            if (s + f) % 10 == 0:
+                run("UPDATE broadcasts SET sent=?, failed=? WHERE id=?", (s, f, bc))
+            time.sleep(0.05)
+        run("UPDATE broadcasts SET sent=?, failed=?, status='done' WHERE id=?", (s, f, bc))
+    threading.Thread(target=work, daemon=True).start()
+    return bc
+
+
+def import_users(bot, ids):
+    def work():
+        ok = bad = 0
+        for uid in ids:
+            try:
+                tg(bot["token"], "sendChatAction", chat_id=uid, action="typing")
+                touch_user(bot["id"], {"id": uid})
+                ok += 1
+            except Exception:
+                bad += 1
+            time.sleep(0.1)
+        log(bot["id"], "info", f"User import finished: {ok} added, {bad} could not be reached")
+    threading.Thread(target=work, daemon=True).start()
 
 
 # ---------- Telegram ----------
@@ -129,6 +191,9 @@ def apply_result(bot, uid, res):
             tg(bot["token"], a["method"], **a["params"])
         except Exception as e:
             log(bot["id"], "error", f'{a["method"]} failed: {e}')
+            cid = a["params"].get("chat_id")
+            if cid and _is_blocked(e):
+                run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bot["id"], cid))
     kv_apply(bot["id"], "bot", res["bot_save"])
     kv_apply(bot["id"], f"user:{uid}", res["user_save"])
     if res.get("pending"):
@@ -183,9 +248,14 @@ def handle_update(bot, upd):
                 cmd = find_command(bid, name, "*")
             else:
                 cmd = find_command(bid, "*")
+    elif "my_chat_member" in upd:
+        m = upd["my_chat_member"]
+        if m.get("chat", {}).get("type") == "private" and m["new_chat_member"]["status"] == "kicked":
+            run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bid, m["from"]["id"]))
+        return
     else:
         return
-    run("INSERT OR IGNORE INTO users(bot_id, user_id) VALUES(?,?)", (bid, user["id"]))
+    touch_user(bid, user)
     if not cmd:
         return
     res = execute(bot, cmd["code"], ctx)
@@ -222,7 +292,7 @@ class Runner(threading.Thread):
         while not self.stop_event.is_set():
             try:
                 updates = tg(token, "getUpdates", offset=offset, timeout=25,
-                             allowed_updates=["message", "callback_query"])
+                             allowed_updates=["message", "callback_query", "my_chat_member"])
                 for u in updates:
                     offset = u["update_id"] + 1
                     self.pool.submit(self._safe, u)
