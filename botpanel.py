@@ -15,13 +15,28 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE, "botpanel.db"))
-KEY_PATH = os.path.join(BASE, ".secret_key")
-if not os.path.exists(KEY_PATH):
-    with open(KEY_PATH, "w") as f: f.write(secrets.token_hex(32))
-    os.chmod(KEY_PATH, 0o600)
+def _writable(p):
+    try:
+        os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        c = sqlite3.connect(p); c.execute("CREATE TABLE IF NOT EXISTS _t(x)"); c.commit(); c.close(); return True
+    except Exception: return False
+if not _writable(DB_PATH):
+    DB_PATH = "/tmp/botpanel.db"; print("WARNING: app folder is read-only, using /tmp/botpanel.db (data is lost on restart)", flush=True)
+
+def load_secret():
+    if os.environ.get("SECRET_KEY"): return os.environ["SECRET_KEY"]  # set this on hosts with ephemeral disk
+    for d in (BASE, "/tmp"):
+        p = os.path.join(d, ".secret_key")
+        try:
+            if not os.path.exists(p):
+                with open(p, "w") as f: f.write(secrets.token_hex(32))
+                os.chmod(p, 0o600)
+            return open(p).read().strip()
+        except Exception: continue
+    return secrets.token_hex(32)
 
 app = Flask(__name__)
-app.secret_key = open(KEY_PATH).read().strip()
+app.secret_key = load_secret()
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # trust Render/nginx proxy headers
 app.config.update(SESSION_COOKIE_NAME="bp_session", SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE") == "1",
@@ -8440,6 +8455,16 @@ def register_env_bots():
             start_bot(r["id"])
         except Exception as e: print("BOT_TOKENS error:", e)
 
+
+from werkzeug.exceptions import HTTPException
+@app.errorhandler(Exception)
+def on_error(e):
+    if isinstance(e, HTTPException): return e
+    tb, eid = traceback.format_exc(), secrets.token_hex(4)
+    print(f"[ERROR {eid}] {request.method} {request.path}\n{tb}", flush=True)  # visible in host logs
+    if os.environ.get("DEBUG_ERRORS") == "1":  # temporary: shows the traceback in the browser
+        return Response(f"Error {eid}\n\n{tb}", status=500, mimetype="text/plain")
+    return Response(f"Internal error (id {eid}). Check the server logs for [ERROR {eid}].", status=500, mimetype="text/plain")
 
 # ---------------------------------------------------------------- boot
 init_db(); ensure_admin()
