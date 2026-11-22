@@ -29,10 +29,14 @@ def auth(f):
 
 
 def norm_name(name):
-    name = (name or "").strip().lower().replace(" ", "_")
-    if not name:
-        return ""
-    return name if name.startswith(("/", "*", "cb:")) else "/" + name
+    """Names are kept as typed ('hii', '/start', 'Link Wallet', 'cb:ok', '*')."""
+    return " ".join((name or "").split())
+
+
+def _exists(bid, name, exclude=None):
+    k = core.nk(name)
+    return any(core.nk(r["name"]) == k for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
+               if r["id"] != exclude)
 
 
 def bot_view(b):
@@ -92,6 +96,7 @@ def add_bot():
              (bid, "cb:ask", 'bot.answer()\nbot.send("What is your name?")\nwait_next("/got_name")\n'))
     core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)",
              (bid, "/got_name", 'user.save("name", text)\nbot.send(f"Nice to meet you, {text}!")\n'))
+    core.start_bot(bid)
     return jsonify(bot_view(core.one("SELECT * FROM bots WHERE id=?", (bid,))))
 
 
@@ -99,7 +104,8 @@ def add_bot():
 @auth
 def del_bot(bid):
     core.stop_bot(bid)
-    for t in ("commands", "kv", "pending", "users", "logs"):
+    core.invalidate(bid)
+    for t in ("commands", "kv", "pending", "users", "logs", "errors", "env", "folders", "miniapps", "broadcasts"):
         core.run(f"DELETE FROM {t} WHERE bot_id=?", (bid,))
     core.run("DELETE FROM bots WHERE id=?", (bid,))
     return jsonify(ok=True)
@@ -130,10 +136,11 @@ def add_command(bid):
     name = norm_name(request.json.get("name"))
     if not name:
         return jsonify(error="Give the command a name."), 400
-    if core.one("SELECT 1 FROM commands WHERE bot_id=? AND name=?", (bid, name)):
+    if _exists(bid, name):
         return jsonify(error=f"{name} already exists."), 400
-    cid = core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)",
-                   (bid, name, request.json.get("code") or "bot.send(\"Hello!\")\n"))
+    cid = core.run("INSERT INTO commands(bot_id, name, code, folder) VALUES(?,?,?,?)",
+                   (bid, name, request.json.get("code") or "bot.send(\"Hello!\")\n", request.json.get("folder")))
+    core.invalidate(bid)
     return jsonify(core.one("SELECT * FROM commands WHERE id=?", (cid,)))
 
 
@@ -142,19 +149,20 @@ def add_command(bid):
 def save_command(cid):
     cmd = core.one("SELECT * FROM commands WHERE id=?", (cid,))
     name = norm_name(request.json.get("name")) or cmd["name"]
-    clash = core.one("SELECT 1 FROM commands WHERE bot_id=? AND name=? AND id<>?",
-                     (cmd["bot_id"], name, cid))
-    if clash:
+    if _exists(cmd["bot_id"], name, cid):
         return jsonify(error=f"{name} already exists."), 400
     core.run("UPDATE commands SET name=?, code=? WHERE id=?",
              (name, request.json.get("code", cmd["code"]), cid))
+    core.invalidate(cmd["bot_id"])
     return jsonify(core.one("SELECT * FROM commands WHERE id=?", (cid,)))
 
 
 @app.delete("/api/commands/<int:cid>")
 @auth
 def del_command(cid):
+    c = core.one("SELECT bot_id FROM commands WHERE id=?", (cid,))
     core.run("DELETE FROM commands WHERE id=?", (cid,))
+    c and core.invalidate(c["bot_id"])
     return jsonify(ok=True)
 
 
@@ -170,7 +178,9 @@ def test_command(cid):
     chat = {"id": 0, "type": "private"}
     msg = {"message_id": 1, "from": user, "chat": chat, "text": text}
     data = text if cmd["name"].startswith("cb:") else None
-    ctx = core.build_ctx(user, chat, msg, text, data, "test")
+    words, n = text.split(), len(cmd["name"].split())
+    args = words[n:] if core.nk(" ".join(words[:n])) == core.nk(cmd["name"]) else words
+    ctx = core.build_ctx(user, chat, msg, text, args, data, "test")
     res = core.execute(bot, code, ctx)
     return jsonify(res)
 
@@ -398,19 +408,245 @@ def import_cmds(bid):
         name = norm_name(c.get("name"))
         if not name:
             continue
-        if core.one("SELECT 1 FROM commands WHERE bot_id=? AND name=?", (bid, name)):
-            core.run("UPDATE commands SET code=? WHERE bot_id=? AND name=?", (c.get("code", ""), bid, name))
+        hit = next((r for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
+                    if core.nk(r["name"]) == core.nk(name)), None)
+        if hit:
+            core.run("UPDATE commands SET code=? WHERE id=?", (c.get("code", ""), hit["id"]))
             updated += 1
         else:
             core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)", (bid, name, c.get("code", "")))
             added += 1
     if data.get("bot_data"):
         core.kv_apply(bid, "bot", data["bot_data"])
+    core.invalidate(bid)
     return jsonify(added=added, updated=updated)
 
 
+# ---------- intro, errors, version, env ----------
+def _count(sql, *args):
+    return core.one(sql, args)["c"]
+
+
+@app.get("/api/bots/<int:bid>/intro")
+@auth
+def intro(bid):
+    b = _bot(bid)
+    return jsonify(name=b["name"], username=b["username"], bot_id=b["token"].split(":")[0],
+                   running=core.is_running(bid), uptime=core.uptime(bid), version=b.get("version") or "1.0.0",
+                   users=_count("SELECT COUNT(*) c FROM users WHERE bot_id=?", bid),
+                   commands=_count("SELECT COUNT(*) c FROM commands WHERE bot_id=?", bid),
+                   errors=_count("SELECT COUNT(*) c FROM errors WHERE bot_id=?", bid),
+                   last_active=core.one("SELECT MAX(last_seen) t FROM users WHERE bot_id=?", (bid,))["t"])
+
+
+@app.post("/api/bots/<int:bid>/version")
+@auth
+def set_version(bid):
+    v = (request.json.get("version") or "").strip()[:20]
+    if not v:
+        return jsonify(error="Enter a version, like 1.0.1."), 400
+    core.run("UPDATE bots SET version=? WHERE id=?", (v, bid))
+    return jsonify(ok=True)
+
+
+@app.get("/api/bots/<int:bid>/errors")
+@auth
+def get_errors(bid):
+    return jsonify(core.rows("SELECT * FROM errors WHERE bot_id=? ORDER BY id DESC LIMIT 100", (bid,)))
+
+
+@app.delete("/api/bots/<int:bid>/errors")
+@auth
+def clear_errors(bid):
+    core.run("DELETE FROM errors WHERE bot_id=?", (bid,))
+    return jsonify(ok=True)
+
+
+@app.get("/api/bots/<int:bid>/env")
+@auth
+def get_env(bid):
+    return jsonify(core.rows("SELECT k, v, raw FROM env WHERE bot_id=? ORDER BY k", (bid,)))
+
+
+@app.put("/api/bots/<int:bid>/env")
+@auth
+def put_env(bid):
+    items = request.json.get("items") or []
+    for it in items:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", it.get("k", "")):
+            return jsonify(error=f"'{it.get('k')}' isn't a valid variable name (letters, digits, underscore)."), 400
+        if it.get("raw"):
+            try:
+                json.loads(it["v"])
+            except Exception:
+                return jsonify(error=f"{it['k']} is marked raw but isn't valid JSON."), 400
+    core.run("DELETE FROM env WHERE bot_id=?", (bid,))
+    for it in items:
+        core.run("INSERT OR REPLACE INTO env(bot_id,k,v,raw) VALUES(?,?,?,?)",
+                 (bid, it["k"], it.get("v", ""), 1 if it.get("raw") else 0))
+    return jsonify(ok=True)
+
+
+# ---------- folders, bulk actions, search ----------
+@app.get("/api/bots/<int:bid>/folders")
+@auth
+def folders(bid):
+    names = {r["name"] for r in core.rows("SELECT name FROM folders WHERE bot_id=?", (bid,))}
+    names |= {r["folder"] for r in core.rows("SELECT DISTINCT folder FROM commands WHERE bot_id=? AND folder<>''", (bid,))
+              if r["folder"]}
+    return jsonify(sorted(names, key=str.lower))
+
+
+@app.post("/api/bots/<int:bid>/folders")
+@auth
+def add_folder(bid):
+    j = request.json
+    name = (j.get("name") or "").strip()[:40]
+    if not name:
+        return jsonify(error="Give the folder a name."), 400
+    if j.get("old"):
+        core.run("UPDATE commands SET folder=? WHERE bot_id=? AND folder=?", (name, bid, j["old"]))
+        core.run("DELETE FROM folders WHERE bot_id=? AND name=?", (bid, j["old"]))
+    core.run("INSERT OR IGNORE INTO folders(bot_id,name) VALUES(?,?)", (bid, name))
+    return jsonify(ok=True)
+
+
+@app.delete("/api/bots/<int:bid>/folders")
+@auth
+def del_folder(bid):
+    name = request.args.get("name", "")
+    core.run("UPDATE commands SET folder=NULL WHERE bot_id=? AND folder=?", (bid, name))
+    core.run("DELETE FROM folders WHERE bot_id=? AND name=?", (bid, name))
+    return jsonify(ok=True)
+
+
+@app.post("/api/bots/<int:bid>/commands/bulk")
+@auth
+def bulk(bid):
+    j = request.json
+    ids = [int(i) for i in j.get("ids", [])]
+    ph = ",".join("?" * len(ids)) or "NULL"
+    if j.get("action") == "delete":
+        core.run(f"DELETE FROM commands WHERE bot_id=? AND id IN ({ph})", (bid, *ids))
+    elif j.get("action") == "move":
+        core.run(f"UPDATE commands SET folder=? WHERE bot_id=? AND id IN ({ph})", (j.get("folder") or None, bid, *ids))
+    core.invalidate(bid)
+    return jsonify(ok=True)
+
+
+def _pattern(j):
+    q = j.get("q") or ""
+    p = q if j.get("regex") else re.escape(q)
+    if j.get("word"):
+        p = r"\b" + p + r"\b"
+    return re.compile(p, 0 if j.get("case") else re.I)
+
+
+@app.post("/api/bots/<int:bid>/search")
+@auth
+def search_code(bid):
+    try:
+        pat = _pattern(request.json)
+    except re.error as e:
+        return jsonify(error=f"That pattern isn't valid: {e}"), 400
+    out = []
+    for c in core.rows("SELECT id, name, code FROM commands WHERE bot_id=? ORDER BY name", (bid,)):
+        hits = [{"line": i, "text": ln.strip()[:200]} for i, ln in enumerate(c["code"].splitlines(), 1) if pat.search(ln)]
+        if hits:
+            out.append({"id": c["id"], "name": c["name"], "matches": hits[:20], "total": len(hits)})
+    return jsonify(out)
+
+
+@app.post("/api/bots/<int:bid>/replace")
+@auth
+def replace_code(bid):
+    j = request.json
+    try:
+        pat = _pattern(j)
+    except re.error as e:
+        return jsonify(error=f"That pattern isn't valid: {e}"), 400
+    r = j.get("replace") or ""
+    n = files = 0
+    for c in core.rows("SELECT id, code FROM commands WHERE bot_id=?", (bid,)):
+        new, k = pat.subn(r if j.get("regex") else (lambda m: r), c["code"])
+        if k:
+            core.run("UPDATE commands SET code=? WHERE id=?", (new, c["id"]))
+            n += k
+            files += 1
+    return jsonify(replaced=n, commands=files)
+
+
+# ---------- users export ----------
+@app.get("/api/bots/<int:bid>/export_users")
+@auth
+def export_users(bid):
+    fmt = "csv" if request.args.get("format") == "csv" else "json"
+    cols = ["user_id", "first_name", "username"]
+    if request.args.get("last_active") == "1":
+        cols.append("last_seen")
+    if request.args.get("created") == "1":
+        cols.append("first_seen")
+    data = core.rows(f"SELECT {','.join(cols)} FROM users WHERE bot_id=? ORDER BY first_seen", (bid,))
+    if fmt == "csv":
+        import csv, io
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=cols)
+        w.writeheader()
+        w.writerows(data)
+        body = buf.getvalue()
+    else:
+        body = json.dumps(data, indent=2, ensure_ascii=False)
+    return app.response_class(body, mimetype="text/plain", headers={
+        "Content-Disposition": f'attachment; filename="{_bot(bid)["username"]}_users.{fmt}"'})
+
+
+# ---------- mini app ----------
+MINI_DEFAULT = """<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>body{font-family:system-ui;padding:24px;background:var(--tg-theme-bg-color);color:var(--tg-theme-text-color)}</style>
+</head><body>
+<h2>Hello <span id="n">there</span></h2>
+<script>const u=Telegram.WebApp.initDataUnsafe.user;if(u)n.textContent=u.first_name;Telegram.WebApp.ready();</script>
+</body></html>
+"""
+
+
+@app.get("/api/bots/<int:bid>/miniapp")
+@auth
+def get_mini(bid):
+    r = core.one("SELECT html FROM miniapps WHERE bot_id=?", (bid,))
+    return jsonify(html=r["html"] if r else MINI_DEFAULT, saved=bool(r), url=f"https://{request.host}/m/{bid}")
+
+
+@app.put("/api/bots/<int:bid>/miniapp")
+@auth
+def put_mini(bid):
+    core.run("INSERT OR REPLACE INTO miniapps(bot_id, html) VALUES(?,?)", (bid, request.json.get("html", "")))
+    return jsonify(ok=True)
+
+
+@app.post("/api/bots/<int:bid>/miniapp/menu")
+@auth
+def mini_menu(bid):
+    url = f"https://{request.host}/m/{bid}"
+    try:
+        core.tg(_bot(bid)["token"], "setChatMenuButton", menu_button={
+            "type": "web_app", "text": (request.json.get("text") or "Open")[:16], "web_app": {"url": url}})
+    except Exception as e:
+        return jsonify(error=f"Telegram refused: {e}"), 400
+    return jsonify(ok=True, url=url)
+
+
+@app.get("/m/<int:bid>")
+def serve_mini(bid):
+    r = core.one("SELECT html FROM miniapps WHERE bot_id=?", (bid,))
+    return app.response_class(r["html"] if r else MINI_DEFAULT, mimetype="text/html")
+
+
+core.autostart()          # bots that were running (and new ones) come back on their own
+
 if __name__ == "__main__":
-    core.autostart()
     # Hosting platforms (Render, Railway...) set PORT and need 0.0.0.0
     default_host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
     app.run(host=os.environ.get("HOST", default_host),

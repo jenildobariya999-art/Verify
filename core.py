@@ -1,12 +1,13 @@
-import os, json, sqlite3, threading, subprocess, sys, time
+import os, re, json, sqlite3, threading, subprocess, sys, time, queue
 from concurrent.futures import ThreadPoolExecutor
 import requests
+from requests.adapters import HTTPAdapter
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("PANEL_DB", os.path.join(BASE, "panel.db"))
 SANDBOX = os.path.join(BASE, "sandbox.py")
 EXEC_TIMEOUT = int(os.environ.get("EXEC_TIMEOUT", "10"))
-MARK = "\x00RESULT\x00"
+WORKERS = int(os.environ.get("WORKERS", "3"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bots(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, username TEXT,
@@ -18,10 +19,24 @@ CREATE TABLE IF NOT EXISTS pending(bot_id INTEGER, user_id INTEGER, command TEXT
 CREATE TABLE IF NOT EXISTS users(bot_id INTEGER, user_id INTEGER, PRIMARY KEY(bot_id, user_id));
 CREATE TABLE IF NOT EXISTS broadcasts(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, ts REAL,
   text TEXT, total INTEGER, sent INTEGER, failed INTEGER, status TEXT);
+CREATE TABLE IF NOT EXISTS errors(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, ts REAL,
+  command TEXT, message TEXT, line INTEGER, level TEXT);
+CREATE TABLE IF NOT EXISTS env(bot_id INTEGER, k TEXT, v TEXT, raw INTEGER DEFAULT 0, PRIMARY KEY(bot_id, k));
+CREATE TABLE IF NOT EXISTS folders(bot_id INTEGER, name TEXT, PRIMARY KEY(bot_id, name));
+CREATE TABLE IF NOT EXISTS miniapps(bot_id INTEGER PRIMARY KEY, html TEXT);
 CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, ts REAL, level TEXT, text TEXT);
+CREATE INDEX IF NOT EXISTS idx_users_bot ON users(bot_id, last_seen);
 """
+MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN first_name TEXT", "ALTER TABLE users ADD COLUMN username TEXT",
+    "ALTER TABLE users ADD COLUMN first_seen REAL", "ALTER TABLE users ADD COLUMN last_seen REAL",
+    "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
+    "ALTER TABLE bots ADD COLUMN translate INTEGER DEFAULT 0",
+    "ALTER TABLE bots ADD COLUMN version TEXT DEFAULT '1.0.0'",
+    "ALTER TABLE commands ADD COLUMN folder TEXT",
+]
 
-DEFAULT_START = '''# Runs when someone sends /start
+DEFAULT_START = '''# Runs when someone sends /start (or just "start")
 name = user.first_name or "there"
 count = user.get("visits", 0) + 1
 user.save("visits", count)
@@ -32,33 +47,22 @@ bot.send(
 )
 '''
 
-_lock = threading.Lock()
-
-
-def _conn():
-    c = sqlite3.connect(DB_PATH, timeout=30)
-    c.row_factory = sqlite3.Row
-    return c
+# ---------- database: one shared connection, WAL, autocommit ----------
+_lock = threading.RLock()
+_db = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None, timeout=30)
+_db.row_factory = sqlite3.Row
+_db.execute("PRAGMA journal_mode=WAL")
+_db.execute("PRAGMA synchronous=NORMAL")
 
 
 def run(sql, args=()):
     with _lock:
-        c = _conn()
-        try:
-            cur = c.execute(sql, args)
-            c.commit()
-            return cur.lastrowid
-        finally:
-            c.close()
+        return _db.execute(sql, args).lastrowid
 
 
 def rows(sql, args=()):
     with _lock:
-        c = _conn()
-        try:
-            return [dict(r) for r in c.execute(sql, args).fetchall()]
-        finally:
-            c.close()
+        return [dict(r) for r in _db.execute(sql, args).fetchall()]
 
 
 def one(sql, args=()):
@@ -68,26 +72,49 @@ def one(sql, args=()):
 
 def init_db():
     with _lock:
-        c = _conn()
-        c.executescript(SCHEMA)
-        c.commit()
-        c.close()
-    for sql in ["ALTER TABLE users ADD COLUMN first_name TEXT", "ALTER TABLE users ADD COLUMN username TEXT",
-                "ALTER TABLE users ADD COLUMN first_seen REAL", "ALTER TABLE users ADD COLUMN last_seen REAL",
-                "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
-                "ALTER TABLE bots ADD COLUMN translate INTEGER DEFAULT 0"]:
+        _db.executescript(SCHEMA.replace("CREATE INDEX IF NOT EXISTS idx_users_bot ON users(bot_id, last_seen);", ""))
+    for sql in MIGRATIONS:
         try:
             run(sql)
         except sqlite3.OperationalError:
             pass
+    run("CREATE INDEX IF NOT EXISTS idx_users_bot ON users(bot_id, last_seen)")
 
 
+# ---------- Telegram (keep-alive connection pool) ----------
+SESSION = requests.Session()
+SESSION.mount("https://", HTTPAdapter(pool_connections=8, pool_maxsize=64))
+
+
+def tg(token, method, **params):
+    r = SESSION.post(f"https://api.telegram.org/bot{token}/{method}", json=params, timeout=40)
+    data = r.json()
+    if not data.get("ok"):
+        raise RuntimeError(data.get("description", "Telegram error"))
+    return data["result"]
+
+
+def log(bot_id, level, text):
+    run("INSERT INTO logs(bot_id, ts, level, text) VALUES(?,?,?,?)", (bot_id, time.time(), level, str(text)[:3000]))
+    run("DELETE FROM logs WHERE bot_id=? AND id<(SELECT MIN(id) FROM (SELECT id FROM logs WHERE bot_id=? "
+        "ORDER BY id DESC LIMIT 500))", (bot_id, bot_id))
+
+
+def record_error(bot_id, command, message, line=None):
+    run("INSERT INTO errors(bot_id, ts, command, message, line, level) VALUES(?,?,?,?,?,'ERROR')",
+        (bot_id, time.time(), command, str(message)[:6000], line))
+    run("DELETE FROM errors WHERE bot_id=? AND id<(SELECT MIN(id) FROM (SELECT id FROM errors WHERE bot_id=? "
+        "ORDER BY id DESC LIMIT 200))", (bot_id, bot_id))
+
+
+# ---------- users ----------
 def touch_user(bid, u):
     now = time.time()
-    run("INSERT OR IGNORE INTO users(bot_id, user_id, first_seen) VALUES(?,?,?)", (bid, u["id"], now))
-    run("UPDATE users SET first_name=COALESCE(?,first_name), username=COALESCE(?,username), last_seen=?, "
-        "blocked=0, first_seen=COALESCE(first_seen,?) WHERE bot_id=? AND user_id=?",
-        (u.get("first_name"), u.get("username"), now, now, bid, u["id"]))
+    run("INSERT INTO users(bot_id,user_id,first_name,username,first_seen,last_seen,blocked) VALUES(?,?,?,?,?,?,0) "
+        "ON CONFLICT(bot_id,user_id) DO UPDATE SET first_name=COALESCE(excluded.first_name,first_name), "
+        "username=COALESCE(excluded.username,username), last_seen=excluded.last_seen, blocked=0, "
+        "first_seen=COALESCE(first_seen,excluded.first_seen)",
+        (bid, u["id"], u.get("first_name"), u.get("username"), now, now))
 
 
 def _is_blocked(err):
@@ -96,9 +123,8 @@ def _is_blocked(err):
 
 
 def send_broadcast(bot, text, parse_mode="HTML"):
-    uids = [r["user_id"] for r in rows(
-        "SELECT user_id FROM users WHERE bot_id=? AND COALESCE(blocked,0)=0", (bot["id"],))]
-    bc = run("INSERT INTO broadcasts(bot_id, ts, text, total, sent, failed, status) VALUES(?,?,?,?,0,0,'sending')",
+    uids = [r["user_id"] for r in rows("SELECT user_id FROM users WHERE bot_id=? AND COALESCE(blocked,0)=0", (bot["id"],))]
+    bc = run("INSERT INTO broadcasts(bot_id,ts,text,total,sent,failed,status) VALUES(?,?,?,?,0,0,'sending')",
              (bot["id"], time.time(), text, len(uids)))
 
     def work():
@@ -113,7 +139,7 @@ def send_broadcast(bot, text, parse_mode="HTML"):
                     run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bot["id"], uid))
             if (s + f) % 10 == 0:
                 run("UPDATE broadcasts SET sent=?, failed=? WHERE id=?", (s, f, bc))
-            time.sleep(0.05)
+            time.sleep(0.04)
         run("UPDATE broadcasts SET sent=?, failed=?, status='done' WHERE id=?", (s, f, bc))
     threading.Thread(target=work, daemon=True).start()
     return bc
@@ -134,26 +160,9 @@ def import_users(bot, ids):
     threading.Thread(target=work, daemon=True).start()
 
 
-# ---------- Telegram ----------
-def tg(token, method, **params):
-    r = requests.post(f"https://api.telegram.org/bot{token}/{method}", json=params, timeout=40)
-    data = r.json()
-    if not data.get("ok"):
-        raise RuntimeError(data.get("description", "Telegram error"))
-    return data["result"]
-
-
-def log(bot_id, level, text):
-    run("INSERT INTO logs(bot_id, ts, level, text) VALUES(?,?,?,?)",
-        (bot_id, time.time(), level, str(text)[:3000]))
-    run("DELETE FROM logs WHERE bot_id=? AND id NOT IN "
-        "(SELECT id FROM logs WHERE bot_id=? ORDER BY id DESC LIMIT 500)", (bot_id, bot_id))
-
-
-# ---------- storage ----------
+# ---------- storage / env ----------
 def kv_all(bot_id, scope):
-    return {r["k"]: json.loads(r["v"]) for r in
-            rows("SELECT k, v FROM kv WHERE bot_id=? AND scope=?", (bot_id, scope))}
+    return {r["k"]: json.loads(r["v"]) for r in rows("SELECT k, v FROM kv WHERE bot_id=? AND scope=?", (bot_id, scope))}
 
 
 def kv_apply(bot_id, scope, changes):
@@ -161,64 +170,153 @@ def kv_apply(bot_id, scope, changes):
         if v is None:
             run("DELETE FROM kv WHERE bot_id=? AND scope=? AND k=?", (bot_id, scope, k))
         else:
-            run("INSERT OR REPLACE INTO kv(bot_id, scope, k, v) VALUES(?,?,?,?)",
-                (bot_id, scope, k, json.dumps(v, default=str)))
+            run("INSERT OR REPLACE INTO kv(bot_id,scope,k,v) VALUES(?,?,?,?)", (bot_id, scope, k, json.dumps(v, default=str)))
 
 
-# ---------- execution ----------
+def env_for(bot_id):
+    out = {}
+    for r in rows("SELECT k, v, raw FROM env WHERE bot_id=?", (bot_id,)):
+        try:
+            out[r["k"]] = json.loads(r["v"]) if r["raw"] else r["v"]
+        except Exception:
+            out[r["k"]] = r["v"]
+    return out
+
+
+# ---------- command matching: "hii", "/hii" and "Link Wallet" all work ----------
+def nk(s):
+    return re.sub(r"\s+", " ", (s or "").strip().lower().lstrip("/")).strip()
+
+
+_index = {}
+
+
+def cmd_index(bid):
+    idx = _index.get(bid)
+    if idx is None:
+        idx = {nk(r["name"]): r["id"] for r in rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))}
+        _index[bid] = idx
+    return idx
+
+
+def invalidate(bid):
+    _index.pop(bid, None)
+
+
+def resolve(bid, text):
+    """Longest-prefix match on words, ignoring a leading '/', else the '*' command."""
+    idx, words = cmd_index(bid), text.split()
+    if words:
+        if words[0].startswith("/"):
+            words[0] = words[0].split("@")[0]
+        for k in range(len(words), 0, -1):
+            cid = idx.get(nk(" ".join(words[:k])))
+            if cid:
+                return cid, words[k:]
+    return idx.get("*"), words
+
+
+# ---------- warm worker pool ----------
+class Worker:
+    def __init__(self):
+        self.jobs = 0
+        self.p = subprocess.Popen([sys.executable, SANDBOX], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True, encoding="utf-8", bufsize=1)
+
+    def call(self, job, timeout):
+        killed = []
+
+        def kill():
+            killed.append(1)
+            self.p.kill()
+        t = threading.Timer(timeout, kill)
+        t.start()
+        try:
+            self.p.stdin.write(json.dumps(job) + "\n")
+            self.p.stdin.flush()
+            line = self.p.stdout.readline()
+        except (BrokenPipeError, OSError, ValueError):
+            line = ""
+        finally:
+            t.cancel()
+        if killed:
+            raise TimeoutError
+        if not line:
+            raise RuntimeError("The command stopped the worker process (for example with os._exit).")
+        self.jobs += 1
+        return json.loads(line)
+
+    def close(self):
+        try:
+            self.p.kill()
+        except Exception:
+            pass
+
+
+_pool = queue.Queue()
+for _ in range(WORKERS):
+    _pool.put(None)          # None = start a worker on first use
+
+
+def warm_up():
+    for _ in range(min(2, WORKERS)):
+        w = _pool.get()
+        _pool.put(w or Worker())
+
+
+EMPTY = {"actions": [], "bot_save": {}, "user_save": {}, "pending": None, "stdout": "", "error_line": None}
+
+
 def execute(bot, code, ctx):
     uid = ctx["user"]["id"]
-    payload = {
-        "code": code, "ctx": ctx,
-        "bot_info": {"username": bot.get("username"), "name": bot.get("name")},
-        "bot_data": kv_all(bot["id"], "bot"),
-        "user_data": kv_all(bot["id"], f"user:{uid}"),
-    }
-    empty = {"actions": [], "bot_save": {}, "user_save": {}, "pending": None, "stdout": ""}
+    job = {"code": code, "ctx": ctx, "env": env_for(bot["id"]),
+           "bot_info": {"username": bot.get("username"), "name": bot.get("name")},
+           "bot_data": kv_all(bot["id"], "bot"), "user_data": kv_all(bot["id"], f"user:{uid}")}
+    w = _pool.get()
     try:
-        p = subprocess.run([sys.executable, SANDBOX], input=json.dumps(payload),
-                           capture_output=True, text=True, timeout=EXEC_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return {**empty, "error": f"Stopped: the command ran longer than {EXEC_TIMEOUT} seconds."}
-    if MARK in p.stdout:
-        return {**empty, **json.loads(p.stdout.rsplit(MARK, 1)[1])}
-    return {**empty, "error": (p.stderr or "The sandbox exited without a result.").strip()[-2000:]}
+        if w is None or w.p.poll() is not None or w.jobs >= 500:
+            if w:
+                w.close()
+            w = Worker()
+        return {**EMPTY, **w.call(job, EXEC_TIMEOUT)}
+    except TimeoutError:
+        w.close(); w = None
+        return {**EMPTY, "error": f"Stopped: the command ran longer than {EXEC_TIMEOUT} seconds."}
+    except Exception as e:
+        if w:
+            w.close()
+        w = None
+        return {**EMPTY, "error": str(e)}
+    finally:
+        _pool.put(w)
 
 
-def apply_result(bot, uid, res):
+def apply_result(bot, uid, res, cmd_name=""):
+    bid = bot["id"]
     for a in res["actions"]:
         try:
             tg(bot["token"], a["method"], **a["params"])
         except Exception as e:
-            log(bot["id"], "error", f'{a["method"]} failed: {e}')
+            if "not modified" in str(e):
+                continue                       # harmless: same text and buttons as before
+            record_error(bid, cmd_name, f"Telegram API error: {e}")
             cid = a["params"].get("chat_id")
             if cid and _is_blocked(e):
-                run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bot["id"], cid))
-    kv_apply(bot["id"], "bot", res["bot_save"])
-    kv_apply(bot["id"], f"user:{uid}", res["user_save"])
+                run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bid, cid))
+    kv_apply(bid, "bot", res["bot_save"])
+    kv_apply(bid, f"user:{uid}", res["user_save"])
     if res.get("pending"):
-        run("INSERT OR REPLACE INTO pending(bot_id, user_id, command) VALUES(?,?,?)",
-            (bot["id"], uid, res["pending"]))
+        run("INSERT OR REPLACE INTO pending(bot_id,user_id,command) VALUES(?,?,?)", (bid, uid, res["pending"]))
     if res.get("stdout"):
-        log(bot["id"], "print", res["stdout"].rstrip())
+        log(bid, "print", res["stdout"].rstrip())
     if res.get("error"):
-        log(bot["id"], "error", res["error"].rstrip())
+        record_error(bid, cmd_name, res["error"].rstrip(), res.get("error_line"))
 
 
-def find_command(bot_id, *names):
-    for n in names:
-        c = one("SELECT * FROM commands WHERE bot_id=? AND name=?", (bot_id, n))
-        if c:
-            return c
-    return None
-
-
-def build_ctx(user, chat, message, text, data=None, cq_id=None):
-    parts = text.split()
+def build_ctx(user, chat, message, text, args=None, data=None, cq_id=None):
     return {"user": user, "chat": chat, "message": message, "text": text,
-            "args": parts[1:] if text.startswith("/") else parts,
-            "data": data, "callback_query_id": cq_id,
-            "message_id": message.get("message_id")}
+            "args": text.split() if args is None else args, "data": data,
+            "callback_query_id": cq_id, "message_id": message.get("message_id")}
 
 
 def handle_update(bot, upd):
@@ -227,27 +325,22 @@ def handle_update(bot, upd):
         cq = upd["callback_query"]
         msg = cq.get("message") or {"chat": {"id": cq["from"]["id"]}}
         data = cq.get("data", "")
-        cmd = find_command(bid, f"cb:{data}", "cb:*")
-        ctx = build_ctx(cq["from"], msg["chat"], msg, "", data, cq["id"])
+        idx = cmd_index(bid)
+        cid = idx.get("cb:" + data.lower()) or idx.get("cb:*") or idx.get(nk(data))
         user = cq["from"]
+        ctx = build_ctx(user, msg["chat"], msg, "", [], data, cq["id"])
     elif "message" in upd and upd["message"].get("from"):
         msg = upd["message"]
         user = msg["from"]
         text = msg.get("text") or msg.get("caption") or ""
-        ctx = build_ctx(user, msg["chat"], msg, text)
-        cmd = None
         pend = one("SELECT command FROM pending WHERE bot_id=? AND user_id=?", (bid, user["id"]))
-        if pend and not text.startswith("/"):
+        if pend:
             run("DELETE FROM pending WHERE bot_id=? AND user_id=?", (bid, user["id"]))
-            cmd = find_command(bid, pend["command"])
+        if pend and not text.startswith("/"):
+            cid, args = cmd_index(bid).get(nk(pend["command"])), text.split()
         else:
-            if pend:
-                run("DELETE FROM pending WHERE bot_id=? AND user_id=?", (bid, user["id"]))
-            if text.startswith("/"):
-                name = text.split()[0].split("@")[0].lower()
-                cmd = find_command(bid, name, "*")
-            else:
-                cmd = find_command(bid, "*")
+            cid, args = resolve(bid, text)
+        ctx = build_ctx(user, msg["chat"], msg, text, args)
     elif "my_chat_member" in upd:
         m = upd["my_chat_member"]
         if m.get("chat", {}).get("type") == "private" and m["new_chat_member"]["status"] == "kicked":
@@ -256,10 +349,11 @@ def handle_update(bot, upd):
     else:
         return
     touch_user(bid, user)
-    if not cmd:
+    if not cid:
         return
-    res = execute(bot, cmd["code"], ctx)
-    apply_result(bot, user["id"], res)
+    cmd = one("SELECT id, name, code FROM commands WHERE id=?", (cid,))
+    if cmd:
+        apply_result(bot, user["id"], execute(bot, cmd["code"], ctx), cmd["name"])
 
 
 # ---------- runners ----------
@@ -269,20 +363,21 @@ RUNNERS = {}
 class Runner(threading.Thread):
     def __init__(self, bot, previous=None):
         super().__init__(daemon=True)
-        self.bot, self.previous = bot, previous
+        self.bot, self.previous, self.started = bot, previous, time.time()
         self.stop_event = threading.Event()
-        self.pool = ThreadPoolExecutor(max_workers=4)
+        self.pool = ThreadPoolExecutor(max_workers=16)
 
     def _safe(self, upd):
         try:
             handle_update(self.bot, upd)
         except Exception as e:
-            log(self.bot["id"], "error", f"Update failed: {e}")
+            record_error(self.bot["id"], "", f"Update failed: {e}")
 
     def run(self):
         bid, token = self.bot["id"], self.bot["token"]
         if self.previous:
             self.previous.join()
+        self.started = time.time()
         log(bid, "info", "Bot started")
         offset = None
         try:
@@ -291,14 +386,13 @@ class Runner(threading.Thread):
             log(bid, "error", f"deleteWebhook failed: {e}")
         while not self.stop_event.is_set():
             try:
-                updates = tg(token, "getUpdates", offset=offset, timeout=25,
-                             allowed_updates=["message", "callback_query", "my_chat_member"])
-                for u in updates:
+                for u in tg(token, "getUpdates", offset=offset, timeout=25,
+                            allowed_updates=["message", "callback_query", "my_chat_member"]):
                     offset = u["update_id"] + 1
                     self.pool.submit(self._safe, u)
             except Exception as e:
                 log(bid, "error", f"Polling error: {e}")
-                self.stop_event.wait(5)
+                self.stop_event.wait(3)
         self.pool.shutdown(wait=False)
         log(bid, "info", "Bot stopped")
 
@@ -306,6 +400,11 @@ class Runner(threading.Thread):
 def is_running(bot_id):
     r = RUNNERS.get(bot_id)
     return bool(r and r.is_alive() and not r.stop_event.is_set())
+
+
+def uptime(bot_id):
+    r = RUNNERS.get(bot_id)
+    return int(time.time() - r.started) if is_running(bot_id) else 0
 
 
 def start_bot(bot_id):
@@ -326,5 +425,6 @@ def stop_bot(bot_id):
 
 
 def autostart():
+    threading.Thread(target=warm_up, daemon=True).start()
     for b in rows("SELECT id FROM bots WHERE running=1"):
         start_bot(b["id"])
