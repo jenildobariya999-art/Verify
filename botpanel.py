@@ -92,6 +92,7 @@ def log_err(bot_id, cmd, msg):
 class D(dict):
     """dict with attribute access; missing keys -> None (like Telegram objects in TBC)."""
     def __getattr__(self, k):
+        if k.startswith("__"): raise AttributeError(k)
         if k == "from_user": k = "from"
         v = self.get(k)
         return D(v) if isinstance(v, dict) else ([D(x) if isinstance(x, dict) else x for x in v] if isinstance(v, list) else v)
@@ -123,6 +124,9 @@ class BotAPI:
         if name.startswith("_"): raise AttributeError(name)
         def call(*a, **kw):
             names = TG_ARGS.get(name, ("chat_id",))
+            if names[0] == "chat_id":
+                if a and not _is_id(a[0]): a = (self.ctx.uid,) + tuple(a)   # bot.sendMessage("text") -> current user
+                if not a and "chat_id" not in kw: kw["chat_id"] = self.ctx.uid
             for n, v in zip(names, a): kw[n] = v
             if name in ("sendMessage", "replyText", "editMessageText"): kw.setdefault("parse_mode", "HTML")
             elif "caption" in kw: kw.setdefault("parse_mode", "HTML")
@@ -181,10 +185,35 @@ class BotObj(DataAPI):
         t = threading.Timer(float(delay_seconds), lambda: POOL.submit(run_command, b, cmd, uid, m, "", options, 0))
         t.daemon = True; t.start()
     def sendMessage(self, text, **kw): return BotAPI(self.ctx).sendMessage(self.ctx.uid, text, **kw)
-    def info(self, *a, **k): 
+    def info(self, *a, **k):
         r = q("SELECT * FROM bots WHERE id=?", (self.ctx.bot_id,), one=True)
-        return D({"id": r["id"], "name": r["name"], "username": r["username"]})
-    def broadcast(self, function=None, **_): raise RuntimeError("Bot.broadcast: use the panel Broadcast tool")
+        tok = r["token"]
+        return D({"id": r["id"], "bot_id": tok.split(":")[0], "token": tok, "bot_username": r["username"], "username": r["username"],
+                  "first_name": r["name"], "name": r["name"], "status": "working" if r["running"] else "stopped"})
+    def broadcast(self, function=None, callback_url=None, **kw):
+        method = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), function or "send_message")
+        if method not in BROADCAST_OK: return {"status": "error", "message": f"function {function} not allowed"}
+        bid, token = self.ctx.bot_id, self.ctx.token
+        uids = [r["uid"] for r in q("SELECT uid FROM users WHERE bot_id=? AND banned=0", (bid,))]
+        bcid = secrets.token_hex(6)
+        def job():
+            ok = fail = 0
+            for uid in uids:
+                data = dict(kw); data["chat_id"] = uid
+                if method not in ("copyMessage", "forwardMessage") and ("text" in data or "caption" in data): data.setdefault("parse_mode", "HTML")
+                try:
+                    r = tg_call(token, method, data)
+                    if r.get("ok"): ok += 1
+                    else: fail += 1
+                except Exception: fail += 1
+                time.sleep(0.05)
+            m = re.search(r"/wh/\d+/([^/]+)/(\d+)/", callback_url or "")
+            if m:
+                cmd = base64.urlsafe_b64decode(m.group(1) + "=" * (-len(m.group(1)) % 4)).decode(); uid = int(m.group(2))
+                run_command(bid, cmd, uid, D({"chat": {"id": uid, "type": "private"}, "from": {"id": uid}, "update_type": "webhook"}), "",
+                            D({"json": D({"broadcast_id": bcid, "total": ok + fail, "total_success": ok, "total_errors": fail})}))
+        threading.Thread(target=job, daemon=True).start()
+        return {"status": "success", "broadcast_id": bcid, "total_users": len(uids)}
 
 class UserObj(DataAPI):
     def __init__(self, ctx): super().__init__(ctx.bot_id, ctx.uid)
@@ -192,7 +221,14 @@ class UserObj(DataAPI):
 class Libs:
     class DateAndTime:
         @staticmethod
-        def now(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        def now(tz="UTC"):  # TBC style: now["date"], now["time"]
+            from datetime import timezone, timedelta
+            try:
+                from zoneinfo import ZoneInfo; t = datetime.now(ZoneInfo(tz))
+            except Exception:  # tzdata missing on slim hosts
+                t = datetime.now(timezone.utc) + timedelta(seconds={"Asia/Kolkata": 19800}.get(tz, 0))
+            return D({"date": t.strftime("%Y-%m-%d"), "time": t.strftime("%H:%M:%S"), "timezone": tz,
+                      "datetime": t.strftime("%Y-%m-%d %H:%M:%S"), "timestamp": int(time.time())})
     class Random:
         import random as _r
         randomInt = staticmethod(lambda a, b: Libs.Random._r.randint(a, b))
@@ -206,9 +242,82 @@ class Libs:
             userRes = staticmethod(lambda n: Res(b, ctx.uid, n))
             globalRes = staticmethod(lambda n: Res(b, 0, n))
         self.Resources = Resources
-        class Webhook:
-            getUrlFor = staticmethod(lambda *a, **k: "")
-        self.Webhook = Webhook
+        self.Webhook = _Webhook(ctx)
+        self.tbcads = _TbcAds()
+
+import base64, urllib.parse as _up, html as _html
+BROADCAST_OK = {"sendMessage", "sendPhoto", "sendVideo", "sendDocument", "sendAudio", "sendAnimation", "sendVoice", "sendSticker", "copyMessage", "forwardMessage"}
+def _is_id(x): return isinstance(x, int) or bool(re.fullmatch(r"-?\d+|@\w+", str(x)))
+
+def InlineKeyboardButton(text, url=None, callback_data=None, **kw):
+    d = {"text": text}
+    if url: d["url"] = url
+    if callback_data is not None: d["callback_data"] = callback_data
+    d.update({k: v for k, v in kw.items() if v is not None}); return d
+def KeyboardButton(text, **kw): return {"text": text, **kw}
+class _KB(dict):
+    def __init__(self, key, row_width=3, **extra):
+        super().__init__({key: []}); self._k, self._rw = key, row_width; self.update(extra)
+    @staticmethod
+    def _c(b): return {"text": b} if isinstance(b, str) else b
+    def add(self, *b, row_width=None):
+        rw, b = row_width or self._rw, [self._c(x) for x in b]
+        for i in range(0, len(b), rw): self[self._k].append(b[i:i + rw])
+        return self
+    def row(self, *b): self[self._k].append([self._c(x) for x in b]); return self
+def InlineKeyboardMarkup(row_width=3): return _KB("inline_keyboard", row_width)
+def ReplyKeyboardMarkup(resize_keyboard=None, one_time_keyboard=None, row_width=3, **kw):
+    ex = {k: bool(v) for k, v in (("resize_keyboard", resize_keyboard), ("one_time_keyboard", one_time_keyboard)) if v is not None}
+    return _KB("keyboard", row_width, **ex)
+def LinkPreviewOptions(**kw): return dict(kw)
+
+class _HTTP:
+    def _do(self, m, url, **kw): kw.setdefault("timeout", 25); return getattr(requests, m)(url, **kw)
+    def get(self, url, **kw): return self._do("get", url, **kw)
+    def post(self, url, **kw): return self._do("post", url, **kw)
+    def put(self, url, **kw): return self._do("put", url, **kw)
+    def delete(self, url, **kw): return self._do("delete", url, **kw)
+HTTP = _HTTP()
+def encodeURIComponent(s): return _up.quote(str(s), safe="-_.!~*'()")
+def rawurlencode(s): return _up.quote(str(s), safe="-_.~")
+
+_ETAG = {"bold": ("<b>", "</b>"), "italic": ("<i>", "</i>"), "underline": ("<u>", "</u>"), "strikethrough": ("<s>", "</s>"),
+         "spoiler": ("<tg-spoiler>", "</tg-spoiler>"), "code": ("<code>", "</code>"), "pre": ("<pre>", "</pre>"),
+         "blockquote": ("<blockquote>", "</blockquote>"), "expandable_blockquote": ("<blockquote expandable>", "</blockquote>")}
+def apply_html_entities(text, entities, _=None):
+    """Telegram message entities (UTF-16 offsets) -> HTML string."""
+    text, opens, closes = text or "", {}, {}
+    for e in entities or []:
+        t, off, ln = e.get("type"), e.get("offset", 0), e.get("length", 0)
+        if t in _ETAG: o, c = _ETAG[t]
+        elif t == "text_link": o, c = f'<a href="{_html.escape(e.get("url") or "", quote=True)}">', "</a>"
+        elif t == "text_mention": o, c = f'<a href="tg://user?id={(e.get("user") or {}).get("id", "")}">', "</a>"
+        elif t == "custom_emoji": o, c = f'<tg-emoji emoji-id="{e.get("custom_emoji_id", "")}">', "</tg-emoji>"
+        else: continue
+        opens.setdefault(off, []).append((ln, o)); closes.setdefault(off + ln, []).append((ln, c))
+    out, pos = [], 0
+    for ch in text:
+        out += [c for _l, c in sorted(closes.get(pos, []), key=lambda x: x[0])]
+        out += [o for _l, o in sorted(opens.get(pos, []), key=lambda x: -x[0])]
+        out.append(_html.escape(ch, quote=False)); pos += 2 if ord(ch) > 0xFFFF else 1
+    out += [c for _l, c in sorted(closes.get(pos, []), key=lambda x: x[0])]
+    return "".join(out)
+
+class _Account:
+    def __init__(self, ctx): self.ctx = ctx
+    def stop_bot(self, *a, **k): stop_bot(self.ctx.bot_id)
+class _TbcAds:  # no ad network here: ads are treated as completed
+    def reward_ad(self, *a, **k): return True
+    def claim(self, *a, **k): return True
+
+def public_url(): return (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+def wh_sig(bid, cmd, uid): return hmac.new(app.secret_key.encode(), f"{bid}|{cmd}|{uid}".encode(), hashlib.sha256).hexdigest()[:24]
+class _Webhook:
+    def __init__(self, ctx): self.ctx = ctx
+    def getUrlFor(self, command, user_id=None, *a, **k):
+        uid = user_id or self.ctx.uid
+        c = base64.urlsafe_b64encode(command.encode()).decode().rstrip("=")
+        return f"{public_url()}/wh/{self.ctx.bot_id}/{c}/{uid}/{wh_sig(self.ctx.bot_id, command, uid)}"
 
 import builtins as _b
 SAFE = {k: getattr(_b, k) for k in (
@@ -217,6 +326,21 @@ SAFE = {k: getattr(_b, k) for k in (
     "IndexError AttributeError RuntimeError StopIteration ZeroDivisionError True False None slice divmod chr ord "
     "bytes hex bin pow iter next type object callable setattr").split()}
 CODE_CACHE = {}
+ENV_NAMES = set(SAFE) | set("Bot bot User libs message u user params options ReturnCommand returnCommand json time bunchify request chat "
+    "inline_message_id update_type call bot_token HTTP Account InlineKeyboardMarkup InlineKeyboardButton ReplyKeyboardMarkup KeyboardButton "
+    "LinkPreviewOptions apply_html_entities rawurlencode encodeURIComponent".split())
+import ast
+def lint_names(code):
+    """Names a command uses but never defines (would raise NameError at runtime)."""
+    try: t = ast.parse(code)
+    except SyntaxError: return []
+    st, ld = set(), set()
+    for n in ast.walk(t):
+        if isinstance(n, ast.Name): (st if isinstance(n.ctx, (ast.Store, ast.Del)) else ld).add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)): st.add(n.name)
+        elif isinstance(n, ast.arg): st.add(n.arg)
+        elif isinstance(n, ast.ExceptHandler) and n.name: st.add(n.name)
+    return sorted(ld - st - ENV_NAMES)
 
 def get_code(bot_id, name):
     r = q("SELECT code FROM commands WHERE bot_id=? AND name=?", (bot_id, name), one=True)
@@ -240,13 +364,19 @@ def run_command(bot_id, name, uid, message, params="", options=None, depth=0):
         code = get_code(bot_id, name)
         if code is None: return
         ctx = Ctx(bot_id, bot["token"], uid, message, depth); ctx.cmd = name
-        import json as _json
-        env = {"__builtins__": SAFE, "Bot": BotObj(ctx), "bot": BotAPI(ctx), "User": UserObj(ctx),
-               "libs": Libs(ctx), "message": message, "u": uid, "user": D({"id": uid}), "params": params,
-               "options": options if options is not None else D(), "ReturnCommand": ReturnCommand,
-               "json": _json, "time": time, "bunchify": lambda x: D(x) if isinstance(x, dict) else x,
-               "request": D(), "chat": message.chat if isinstance(message, dict) else None,
-               "inline_message_id": None}
+        opts = options if options is not None else D()
+        cq = opts.get("callback_query") if isinstance(opts, dict) else None
+        if isinstance(message, dict) and not message.get("update_type"): message["update_type"] = "callback_query" if cq else "message"
+        env = {"__builtins__": SAFE, "Bot": BotObj(ctx), "bot": BotAPI(ctx), "User": UserObj(ctx), "libs": Libs(ctx),
+               "message": message, "u": uid, "user": D({"id": uid}), "params": params, "options": opts,
+               "ReturnCommand": ReturnCommand, "returnCommand": ReturnCommand, "json": json, "time": time,
+               "bunchify": lambda x: D(x) if isinstance(x, dict) else x, "request": D(),
+               "chat": message.chat if isinstance(message, D) else None, "inline_message_id": None,
+               "update_type": message.get("update_type") if isinstance(message, dict) else "message",
+               "call": D(cq) if cq else None, "bot_token": bot["token"], "HTTP": HTTP, "Account": _Account(ctx),
+               "InlineKeyboardMarkup": InlineKeyboardMarkup, "InlineKeyboardButton": InlineKeyboardButton,
+               "ReplyKeyboardMarkup": ReplyKeyboardMarkup, "KeyboardButton": KeyboardButton, "LinkPreviewOptions": LinkPreviewOptions,
+               "apply_html_entities": apply_html_entities, "rawurlencode": rawurlencode, "encodeURIComponent": encodeURIComponent}
         exec(code, env)
     except ReturnCommand:
         pass
@@ -291,19 +421,22 @@ def stop_bot(bot_id):
         if r: r.stop_flag.set()
         q("UPDATE bots SET running=0 WHERE id=?", (bot_id,), commit=True)
 
+def routable(c): return c.startswith("/") and not c.startswith("//")  # "//name" commands are internal: never callable by users
+
 def handle_update(bot_id, token, up):
     try:
-        cb = up.get("callback_query"); jr = up.get("chat_join_request")
+        kind = "my_chat_member" if up.get("my_chat_member") else "chat_join_request" if up.get("chat_join_request") else None
+        if kind:
+            m = up[kind]; frm = m["from"]; msg = D(m); msg["update_type"] = kind
+            run_command(bot_id, "/handler_special_updates", frm["id"], msg, "", D(up))
+            if kind == "chat_join_request": run_command(bot_id, "@", frm["id"], msg, "", D(up))
+            return
+        cb = up.get("callback_query")
         if cb:
             frm, msg, text = cb["from"], D(cb.get("message") or {}), cb.get("data", "")
             tg_call(token, "answerCallbackQuery", {"callback_query_id": cb["id"]})
         elif up.get("message"):
             m = up["message"]; frm, msg, text = m["from"], D(m), m.get("text") or m.get("caption") or ""
-        elif jr:
-            frm, msg, text = jr["from"], D({"chat": jr["chat"], "from": jr["from"]}), ""
-            if q("SELECT 1 FROM commands WHERE bot_id=? AND name='/handler_special_updates'", (bot_id,), one=True):
-                run_command(bot_id, "/handler_special_updates", frm["id"], msg, "", D(up)); return
-            return
         else: return
         uid = frm["id"]
         if frm.get("is_bot"): return
@@ -314,16 +447,18 @@ def handle_update(bot_id, token, up):
               (now(), frm.get("first_name", ""), frm.get("username", ""), bot_id, uid), commit=True)
         u = q("SELECT banned FROM users WHERE bot_id=? AND uid=?", (bot_id, uid), one=True)
         if u and u["banned"]: return
-        opts = D({"callback_data": text, "callback_query": cb}) if cb else D()
-        if not msg.get("chat"): msg["chat"] = {"id": uid}
+        opts = D({"callback_data": text, "callback_query": D(cb)}) if cb else D()
+        if not msg.get("chat"): msg["chat"] = {"id": uid, "type": "private"}
+        msg["update_type"] = "callback_query" if cb else "message"
+        if cb and not msg.get("from"): msg["from"] = frm
         with LOCK:
             w = q("SELECT cmd FROM waits WHERE bot_id=? AND uid=?", (bot_id, uid), one=True)
             if w: q("DELETE FROM waits WHERE bot_id=? AND uid=?", (bot_id, uid), commit=True)
-        if w and not (text.startswith("/") and not cb and False):
+        if w:
             run_command(bot_id, w["cmd"], uid, msg, text, opts); return
-        if text.startswith("/") or (cb and text):
+        if text.startswith("/"):
             parts = text.split(None, 1); cmd = parts[0].split("@")[0]; params = parts[1] if len(parts) > 1 else ""
-            if q("SELECT 1 FROM commands WHERE bot_id=? AND name=?", (bot_id, cmd), one=True):
+            if routable(cmd) and q("SELECT 1 FROM commands WHERE bot_id=? AND name=?", (bot_id, cmd), one=True):
                 run_command(bot_id, cmd, uid, msg, params, opts); return
         run_command(bot_id, "@", uid, msg, text, opts)
     except Exception:
@@ -346,10 +481,10 @@ FAILS = {}
 @app.before_request
 def guard():
     if request.endpoint == "static": return
-    if request.method == "POST" and request.endpoint != "login":
+    if request.method == "POST" and request.endpoint not in ("login", "webhook"):
         tok = request.form.get("_csrf", "")
         if not session.get("csrf") or not hmac.compare_digest(tok, session["csrf"]): abort(400, "Bad CSRF token")
-    if request.endpoint not in ("login", "health") and not session.get("auth"):
+    if request.endpoint not in ("login", "health", "webhook") and not session.get("auth"):
         return redirect(url_for("login"))
 
 @app.after_request
@@ -357,6 +492,8 @@ def headers(r):
     r.headers.update({"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin",
         "Content-Security-Policy": "default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'",
         "Cache-Control": "no-store"})
+    if request.endpoint == "webhook":  # external verification pages call this from the browser
+        r.headers.update({"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET, POST, OPTIONS"})
     return r
 
 @app.context_processor
@@ -415,7 +552,7 @@ def admin_ids():
     return [x.strip() for x in os.environ.get("ADMIN_TG_ID", "").split(",") if x.strip().lstrip("-").isdigit()]
 
 def otp_token():
-    for t in (x.strip() for x in os.environ.get("BOT_TOKENS", "").split(",")):
+    for t in (x.strip().partition("=")[0] for x in os.environ.get("BOT_TOKENS", "").split(",")):
         if t: return t
     r = q("SELECT token FROM bots ORDER BY id LIMIT 1", one=True)
     return r["token"] if r else None
@@ -487,7 +624,7 @@ def home():
       <p class=tag>@{{b.username}}</p><p>{{b.cmds}} commands · {{b.users}} users</p>
       <span class="{{'ok' if b.running else 'bad'}}">{{'● running' if b.running else '● stopped'}}</span></a>{% endfor %}</div>
       <div class=card><h1>{{ic('plus')}}Add bot</h1><form method=post action="/bots/add"><input type=hidden name=_csrf value="{{csrf}}">
-      <div class=row><input name=token placeholder="Bot token from @BotFather" required style="flex:1"><button class=btn>Add</button></div></form></div>""",
+      <div class=row><input name=token placeholder="Bot token from @BotFather" required style="flex:1"><select name=template style="width:auto"><option value=blank>Blank bot (/start only)</option><option value=yono>Yono Big Promocodes (89 commands)</option></select><button class=btn>Add</button></div></form></div>""",
         nav="home", rows=rows)
 
 @app.post("/bots/add")
@@ -500,8 +637,9 @@ def bot_add():
     r = info["result"]
     try: q("INSERT INTO bots(name,username,token,created) VALUES(?,?,?,?)", (r["first_name"], r["username"], token, now()), commit=True)
     except sqlite3.IntegrityError: flash("Bot already added"); return redirect("/")
-    seed_builtin(q("SELECT id FROM bots WHERE token=?", (token,), one=True)["id"])
-    flash("Bot added with built-in commands loaded"); return redirect("/")
+    tpl = request.form.get("template", "blank")
+    n = seed_template(q("SELECT id FROM bots WHERE token=?", (token,), one=True)["id"], tpl)
+    flash(f"Bot added with {n} commands from template '{tpl}'"); return redirect("/")
 
 @app.route("/bot/<int:bid>")
 def bot_view(bid):
@@ -525,7 +663,7 @@ BOT_TPL = """<h1>{{ic('bot')}}{{b.name}} <span class=tag>@{{b.username}}</span> 
 <button class="btn s {{'r' if b.running else ''}}">{{ic('stop' if b.running else 'play')}}{{'Stop' if b.running else 'Start'}}</button></form></div>
 {% if tab=='commands' %}<div class=card><div class=row><form method=get style="flex:1"><input type=hidden name=tab value=commands><input name=s value="{{s}}" placeholder="Search commands"></form>
 <a class=btn href="/bot/{{b.id}}/cmd">{{ic('plus')}}New command</a><a class="btn g" href="/bot/{{b.id}}/commands.txt">{{ic('dl')}}Export</a>
-<form class=in method=post action="/bot/{{b.id}}/commands/builtin" onsubmit="return confirm('Overwrite same-named commands with built-in versions?')"><input type=hidden name=_csrf value="{{csrf}}"><button class="btn g">{{ic('ul')}}Load built-in</button></form></div>
+<form class=in method=post action="/bot/{{b.id}}/commands/builtin" onsubmit="return confirm('Overwrite same-named commands with the template version?')"><input type=hidden name=_csrf value="{{csrf}}"><select name=template style="width:auto"><option value=blank>Blank bot (/start only)</option><option value=yono>Yono Big Promocodes (89 commands)</option></select><button class="btn g">{{ic('ul')}}Load template</button></form></div>
 <table><tr><th>Command<th>Size<th>Updated<th></tr>{% for c in cmds %}<tr><td>{{c.name}}<td>{{c.n}}<td>{{c.updated}}
 <td><a class="btn g s" href="/bot/{{b.id}}/cmd?name={{c.name|urlencode}}">{{ic('edit')}}Edit</a>
 <form class=in method=post action="/bot/{{b.id}}/cmd/delete" onsubmit="return confirm('Delete command?')"><input type=hidden name=_csrf value="{{csrf}}"><input type=hidden name=name value="{{c.name}}"><button class="btn r s">{{ic('trash')}}</button></form></tr>{% endfor %}</table></div>
@@ -569,7 +707,8 @@ def cmd_edit(bid):
         if err: flash("Not saved - " + err); return page(CMD_TPL, bid=bid, b=b, name=name, newname=newname, code=code)
         if name and name != newname: q("DELETE FROM commands WHERE bot_id=? AND name=?", (bid, name), commit=True)
         q("INSERT OR REPLACE INTO commands VALUES(?,?,?,?)", (bid, newname, code, now()), commit=True)
-        flash("Saved"); return redirect(f"/bot/{bid}/cmd?name={newname}")
+        w = lint_names(code)
+        flash("Saved" + (f" - warning, undefined names: {', '.join(w)}" if w else "")); return redirect(f"/bot/{bid}/cmd?name={newname}")
     r = q("SELECT code FROM commands WHERE bot_id=? AND name=?", (bid, name), one=True) if name else None
     return page(CMD_TPL, bid=bid, b=b, name=name, newname=name or "/", code=r["code"] if r else "")
 
@@ -8422,28 +8561,36 @@ if Ex1 and Ex2:
         pass''',
 }
 
-def seed_builtin(bot_id, overwrite=True):
-    """Copy the built-in commands into a bot (they stay editable in the panel)."""
+STARTER = ('name = (message.from_user.first_name or "friend").replace("<", "&lt;")\n'
+           'bot.replyText(u, f"<b>Hello {name}!</b>\\nThis bot runs on BotPanel. Edit /start in the panel.")\n')
+TEMPLATES = {"blank": {"/start": STARTER}, "yono": BUILTIN_COMMANDS}   # add more templates here; each bot keeps its OWN commands
+
+def seed_template(bot_id, template="blank", overwrite=True):
+    """Copy a template's commands into ONE bot. Commands are per-bot and stay editable in the panel."""
+    cmds = TEMPLATES.get(template)
+    if not cmds: return 0
     verb = "INSERT OR REPLACE" if overwrite else "INSERT OR IGNORE"
     with LOCK:
         c = db()
         try:
-            c.executemany(f"{verb} INTO commands VALUES(?,?,?,?)", [(bot_id, n, code, now()) for n, code in BUILTIN_COMMANDS.items()])
+            c.executemany(f"{verb} INTO commands VALUES(?,?,?,?)", [(bot_id, n, code, now()) for n, code in cmds.items()])
             c.commit()
         finally:
             c.close()
-    return len(BUILTIN_COMMANDS)
+    return len(cmds)
 
 @app.post("/bot/<int:bid>/commands/builtin")
 def cmds_builtin(bid):
-    bot_or_404(bid); flash(f"Loaded {seed_builtin(bid)} built-in commands"); return redirect(f"/bot/{bid}")
+    bot_or_404(bid); t = request.form.get("template", "blank")
+    flash(f"Loaded {seed_template(bid, t)} commands from template '{t}'" if t in TEMPLATES else "Unknown template"); return redirect(f"/bot/{bid}")
 
 @app.route("/health")
 def health(): return "ok"
 
 def register_env_bots():
-    """BOT_TOKENS=tok1,tok2 -> auto-add + start on every boot (needed on free hosts with ephemeral disk)."""
-    for t in filter(None, (x.strip() for x in os.environ.get("BOT_TOKENS", "").split(","))):
+    """BOT_TOKENS=tokenA=yono,tokenB=blank  (template optional, default DEFAULT_TEMPLATE or 'yono'). Each bot gets its own commands."""
+    for item in filter(None, (x.strip() for x in os.environ.get("BOT_TOKENS", "").split(","))):
+        t, _, tpl = item.partition("="); tpl = tpl.strip() or os.environ.get("DEFAULT_TEMPLATE", "yono")
         try:
             r = q("SELECT id FROM bots WHERE token=?", (t,), one=True)
             if not r:
@@ -8451,10 +8598,22 @@ def register_env_bots():
                 if not info.get("ok"): print("BOT_TOKENS: invalid token skipped"); continue
                 q("INSERT INTO bots(name,username,token,created) VALUES(?,?,?,?)", (info["result"]["first_name"], info["result"]["username"], t, now()), commit=True)
                 r = q("SELECT id FROM bots WHERE token=?", (t,), one=True)
-                seed_builtin(r["id"])
+                seed_template(r["id"], tpl)
             start_bot(r["id"])
         except Exception as e: print("BOT_TOKENS error:", e)
 
+@app.route("/wh/<int:bid>/<cmd>/<int:uid>/<sig>", methods=["GET", "POST", "OPTIONS"])
+def webhook(bid, cmd, uid, sig):
+    if request.method == "OPTIONS": return Response("", 204)
+    try: command = base64.urlsafe_b64decode(cmd + "=" * (-len(cmd) % 4)).decode()
+    except Exception: abort(400)
+    if not hmac.compare_digest(sig, wh_sig(bid, command, uid)): abort(403)
+    bot_or_404(bid)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict): data = request.values.to_dict()
+    msg = D({"chat": {"id": uid, "type": "private"}, "from": {"id": uid}, "update_type": "webhook"})
+    POOL.submit(run_command, bid, command, uid, msg, "", D({"json": D(data)}))
+    return Response(json.dumps({"ok": True}), mimetype="application/json")
 
 from werkzeug.exceptions import HTTPException
 @app.errorhandler(Exception)
