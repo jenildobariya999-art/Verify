@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Botbench · Sign in</title>
+<style>
+  :root { --bg:#e6eaf0; --card:#f7f8fa; --ink:#1b2433; --muted:#5b6679; --accent:#2f6fed; --err:#c23b3b; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg);
+         color:var(--ink); font:16px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  form { width:min(360px, 92vw); background:var(--card); padding:32px; border-radius:10px;
+         box-shadow:0 1px 0 #cfd6e2, 0 12px 30px -18px #1b243366; }
+  h1 { margin:0 0 4px; font-size:26px; letter-spacing:-.02em; }
+  p { margin:0 0 22px; color:var(--muted); }
+  label { display:block; font-weight:600; margin-bottom:6px; }
+  input { width:100%; padding:10px 12px; font:inherit; border:1px solid #b9c2d3; border-radius:4px; background:#fff; }
+  input:focus-visible, button:focus-visible { outline:3px solid #2f6fed55; outline-offset:1px; }
+  button { margin-top:16px; width:100%; padding:11px; font:inherit; font-weight:600; color:#fff;
+           background:var(--accent); border:0; border-radius:4px; cursor:pointer; }
+  .err { color:var(--err); margin-top:12px; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Botbench</h1>
+  <p>Build and run Telegram bots with Python.</p>
+  <label for="pw">Panel password</label>
+  <input id="pw" name="password" type="password" autofocus required>
+  <button type="submit">Sign in</button>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+</form>
+</body>
+</html>

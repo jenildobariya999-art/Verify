@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Botbench</title>
+<style>
+  :root { --bg:#e6eaf0; --card:#f7f8fa; --ink:#1b2433; --muted:#5b6679; --line:#cfd6e2;
+          --rail:#1b2433; --rail-ink:#c9d2e3; --accent:#2f6fed; --ok:#1e9e6a; --err:#c23b3b;
+          --code-bg:#0f1624; --code-ink:#dde6f7;
+          --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  button, input { font:inherit; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible
+    { outline:3px solid #2f6fed66; outline-offset:1px; }
+  .app { display:grid; grid-template-columns:240px 1fr; height:100%; }
+  .rail { background:var(--rail); color:var(--rail-ink); padding:18px 12px; display:flex; flex-direction:column; gap:6px; overflow:auto; }
+  .rail h1 { margin:0 8px 14px; font-size:20px; color:#fff; letter-spacing:-.01em; }
+  .bot { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:6px; background:none;
+         border:0; color:inherit; text-align:left; cursor:pointer; width:100%; }
+  .bot:hover { background:#ffffff14; }
+  .bot[aria-current="true"] { background:#ffffff24; color:#fff; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#5b6679; flex:none; }
+  .dot.on { background:#3ddc97; }
+  .bot small { display:block; color:#8e9ab2; }
+  .rail .spacer { flex:1; }
+  .rail .link { color:#8e9ab2; padding:8px 10px; text-decoration:none; }
+  .btn { padding:8px 14px; border-radius:4px; border:1px solid #b9c2d3; background:#fff; color:var(--ink); cursor:pointer; font-weight:600; }
+  .btn:hover { background:#eef2f9; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn.primary:hover { background:#2459c4; }
+  .btn.danger { color:var(--err); }
+  .rail .btn { background:#ffffff14; border-color:#ffffff30; color:#fff; }
+  main { display:flex; flex-direction:column; min-width:0; height:100%; }
+  .top { display:flex; align-items:center; gap:14px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--card); flex-wrap:wrap; }
+  .top h2 { margin:0; font-size:19px; }
+  .top .meta { color:var(--muted); }
+  .top .grow { flex:1; }
+  .tabs { display:flex; gap:4px; padding:0 22px; background:var(--card); border-bottom:1px solid var(--line); }
+  .tab { padding:10px 14px; background:none; border:0; border-bottom:3px solid transparent; cursor:pointer; color:var(--muted); font-weight:600; }
+  .tab[aria-selected="true"] { color:var(--ink); border-color:var(--accent); }
+  .pane { flex:1; min-height:0; overflow:auto; }
+  .empty { max-width:420px; margin:12vh auto; text-align:center; color:var(--muted); padding:0 20px; }
+  .empty h2 { color:var(--ink); }
+  .cmds { display:grid; grid-template-columns:230px 1fr; height:100%; }
+  .list { border-right:1px solid var(--line); background:var(--card); overflow:auto; padding:10px; }
+  .list .item { display:block; width:100%; padding:7px 10px; border-radius:4px; border:0; background:none; text-align:left;
+                cursor:pointer; font-family:var(--mono); font-size:13.5px; }
+  .list .item:hover { background:#e4e9f2; }
+  .list .item[aria-current="true"] { background:var(--accent); color:#fff; }
+  .list .btn { width:100%; margin-top:8px; }
+  .editor { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .edbar { display:flex; gap:10px; align-items:center; padding:10px 16px; flex-wrap:wrap; }
+  .edbar input { padding:7px 10px; border:1px solid #b9c2d3; border-radius:4px; font-family:var(--mono); width:220px; background:#fff; }
+  .edbar .hint { color:var(--muted); font-size:13px; }
+  textarea.code { flex:1; min-height:240px; width:100%; resize:none; border:0; padding:16px 18px; background:var(--code-bg);
+                  color:var(--code-ink); font:14px/1.6 var(--mono); tab-size:4; white-space:pre; }
+  .test { background:var(--card); border-top:1px solid var(--line); padding:10px 16px; max-height:38%; overflow:auto; }
+  .test .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .test input { flex:1; min-width:160px; padding:7px 10px; border:1px solid #b9c2d3; border-radius:4px; background:#fff; }
+  pre.out { margin:10px 0 0; white-space:pre-wrap; font:13px/1.5 var(--mono); }
+  .out .act { color:#1c4fb8; } .out .bad { color:var(--err); } .out .mut { color:var(--muted); }
+  .logs { padding:14px 22px; font:13px/1.55 var(--mono); }
+  .logline { padding:4px 0; border-bottom:1px solid #d7dde8; white-space:pre-wrap; }
+  .lv-error { color:var(--err); } .lv-info { color:var(--muted); }
+  .help { max-width:760px; padding:20px 28px 40px; }
+  .help h3 { margin:26px 0 6px; }
+  .help code, .help pre { font-family:var(--mono); font-size:13px; }
+  .help pre { background:var(--code-bg); color:var(--code-ink); padding:12px 14px; border-radius:6px; overflow:auto; }
+  .help code { background:#d9e0ec; padding:1px 5px; border-radius:3px; }
+  .help pre code { background:none; padding:0; }
+  dialog { border:0; border-radius:10px; padding:24px; width:min(440px, 92vw); background:var(--card); box-shadow:0 20px 50px -20px #000a; }
+  dialog::backdrop { background:#1b243399; }
+  dialog h3 { margin:0 0 6px; }
+  dialog p { margin:0 0 14px; color:var(--muted); }
+  dialog input { width:100%; padding:10px 12px; border:1px solid #b9c2d3; border-radius:4px; background:#fff; font-family:var(--mono); }
+  dialog .row { display:flex; justify-content:flex-end; gap:10px; margin-top:16px; }
+  .msg { color:var(--err); margin-top:10px; min-height:1.4em; }
+  @media (max-width:760px) {
+    .app { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+    .rail { flex-direction:row; align-items:center; overflow-x:auto; padding:8px; }
+    .rail h1, .rail .spacer, .rail .link { display:none; }
+    .bot { width:auto; white-space:nowrap; }
+    .cmds { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+    .list { border-right:0; border-bottom:1px solid var(--line); max-height:150px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <h1>Botbench</h1>
+    <div id="bots" style="display:contents"></div>
+    <button class="btn" id="addBot">Add a bot</button>
+    <div class="spacer"></div>
+    <a class="link" href="/logout">Sign out</a>
+  </aside>
+  <main id="main"></main>
+</div>
+
+<dialog id="dlgBot">
+  <h3>Add a bot</h3>
+  <p>Create a bot with @BotFather on Telegram, then paste its token here.</p>
+  <input id="tokenIn" placeholder="123456:ABC-DEF…" autocomplete="off" spellcheck="false">
+  <div class="msg" id="tokenMsg"></div>
+  <div class="row"><button class="btn" id="tokenCancel">Cancel</button><button class="btn primary" id="tokenOk">Add bot</button></div>
+</dialog>
+
+<dialog id="dlgCmd">
+  <h3>New command</h3>
+  <p>Use <code>/name</code> for a command, <code>*</code> for any other text, or <code>cb:data</code> for a button press.</p>
+  <input id="cmdIn" placeholder="/help" autocomplete="off" spellcheck="false">
+  <div class="msg" id="cmdMsg"></div>
+  <div class="row"><button class="btn" id="cmdCancel">Cancel</button><button class="btn primary" id="cmdOk">Create command</button></div>
+</dialog>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const S = { bots: [], bot: null, cmds: [], cmd: null, tab: "commands", timer: null };
+
+async function api(path, method = "GET", body) {
+  const r = await fetch(path, { method, headers: { "Content-Type": "application/json" },
+                                body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) { location.reload(); return; }
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+
+async function loadBots(select) {
+  S.bots = await api("/api/bots");
+  if (select) S.bot = S.bots.find(b => b.id === select) || null;
+  else if (S.bot) S.bot = S.bots.find(b => b.id === S.bot.id) || null;
+  if (!S.bot && S.bots.length) S.bot = S.bots[0];
+  renderRail();
+  if (S.bot && !S.cmds.length) await loadCmds(); else renderMain();
+}
+
+function renderRail() {
+  $("#bots").innerHTML = S.bots.map(b => `
+    <button class="bot" data-id="${b.id}" aria-current="${S.bot && S.bot.id === b.id}">
+      <span class="dot ${b.running ? "on" : ""}" title="${b.running ? "Running" : "Stopped"}"></span>
+      <span>${esc(b.name)}<small>@${esc(b.username)}</small></span>
+    </button>`).join("");
+  document.querySelectorAll(".bot").forEach(el => el.onclick = async () => {
+    S.bot = S.bots.find(b => b.id == el.dataset.id); S.cmds = []; S.cmd = null; renderRail(); await loadCmds();
+  });
+}
+
+async function loadCmds(keepId) {
+  S.cmds = await api(`/api/bots/${S.bot.id}/commands`);
+  S.cmd = S.cmds.find(c => c.id === (keepId ?? (S.cmd && S.cmd.id))) || S.cmds[0] || null;
+  renderMain();
+}
+
+function renderMain() {
+  clearInterval(S.timer);
+  const m = $("#main");
+  if (!S.bot) {
+    m.innerHTML = `<div class="empty"><h2>No bots yet</h2>
+      <p>Add your first Telegram bot token to start writing commands in Python.</p>
+      <button class="btn primary" onclick="$('#addBot').click()">Add a bot</button></div>`;
+    return;
+  }
+  const b = S.bot;
+  m.innerHTML = `
+    <div class="top">
+      <h2>${esc(b.name)}</h2><span class="meta">@${esc(b.username)} · ${b.users} user${b.users === 1 ? "" : "s"} · token ending ${esc(b.token_hint)}</span>
+      <span class="grow"></span>
+      <button class="btn ${b.running ? "" : "primary"}" id="toggle">${b.running ? "Stop bot" : "Start bot"}</button>
+      <button class="btn danger" id="delBot">Remove bot</button>
+    </div>
+    <div class="tabs" role="tablist">
+      ${["commands", "logs", "help"].map(t => `<button class="tab" role="tab" data-t="${t}" aria-selected="${S.tab === t}">${{ commands: "Commands", logs: "Logs", help: "Python API" }[t]}</button>`).join("")}
+    </div>
+    <div class="pane" id="pane"></div>`;
+  $("#toggle").onclick = async () => {
+    await api(`/api/bots/${b.id}/${b.running ? "stop" : "start"}`, "POST");
+    setTimeout(() => loadBots(), 400);
+  };
+  $("#delBot").onclick = async () => {
+    if (!confirm(`Remove ${b.name} and all its commands and data? This can't be undone.`)) return;
+    await api(`/api/bots/${b.id}`, "DELETE"); S.bot = null; S.cmds = []; S.cmd = null; await loadBots();
+  };
+  document.querySelectorAll(".tab").forEach(t => t.onclick = () => { S.tab = t.dataset.t; renderMain(); });
+  ({ commands: renderCommands, logs: renderLogs, help: renderHelp }[S.tab])();
+}
+
+function renderCommands() {
+  const c = S.cmd;
+  $("#pane").innerHTML = `<div class="cmds">
+    <div class="list">
+      ${S.cmds.map(x => `<button class="item" data-id="${x.id}" aria-current="${c && c.id === x.id}">${esc(x.name)}</button>`).join("")}
+      <button class="btn" id="newCmd">New command</button>
+    </div>
+    <div class="editor">${c ? `
+      <div class="edbar">
+        <input id="cname" value="${esc(c.name)}" aria-label="Command name">
+        <button class="btn primary" id="save">Save</button>
+        <button class="btn danger" id="delCmd">Delete</button>
+        <span class="hint" id="saveHint">Ctrl/⌘+S saves. Restart isn't needed.</span>
+      </div>
+      <textarea class="code" id="code" spellcheck="false" aria-label="Python code">${esc(c.code)}</textarea>
+      <div class="test">
+        <div class="row">
+          <input id="testText" placeholder="Test input, e.g. /start or a message" value="${esc(c.name.startsWith("/") ? c.name : "")}">
+          <button class="btn" id="runTest">Run test</button>
+          <span class="hint">Nothing is sent to Telegram and no data is saved.</span>
+        </div>
+        <pre class="out" id="out"></pre>
+      </div>` : `<div class="empty"><h2>No commands</h2><p>Create a command to tell your bot what to do.</p></div>`}
+    </div></div>`;
+  document.querySelectorAll(".item").forEach(el => el.onclick = () => { S.cmd = S.cmds.find(x => x.id == el.dataset.id); renderCommands(); });
+  $("#newCmd").onclick = () => { $("#cmdIn").value = ""; $("#cmdMsg").textContent = ""; $("#dlgCmd").showModal(); $("#cmdIn").focus(); };
+  if (!c) return;
+
+  const code = $("#code");
+  code.addEventListener("keydown", e => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const s = code.selectionStart;
+      code.setRangeText("    ", s, code.selectionEnd, "end");
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
+  });
+  async function save() {
+    try {
+      const r = await api(`/api/commands/${c.id}`, "PUT", { name: $("#cname").value, code: code.value });
+      Object.assign(c, r); $("#saveHint").textContent = "Saved."; await loadCmds(c.id);
+    } catch (e) { $("#saveHint").textContent = e.message; }
+  }
+  $("#save").onclick = save;
+  $("#delCmd").onclick = async () => {
+    if (!confirm(`Delete ${c.name}?`)) return;
+    await api(`/api/commands/${c.id}`, "DELETE"); S.cmd = null; await loadCmds();
+  };
+  $("#runTest").onclick = async () => {
+    const out = $("#out"); out.textContent = "Running…";
+    try {
+      const r = await api(`/api/commands/${c.id}/test`, "POST", { code: code.value, text: $("#testText").value });
+      let h = "";
+      r.actions.forEach(a => {
+        const p = a.params; const body = p.text || p.caption || p.photo || p.document || JSON.stringify(p);
+        h += `<span class="act">→ ${esc(a.method)}</span> ${esc(body)}\n`;
+        if (p.reply_markup) h += `<span class="mut">   buttons: ${esc(JSON.stringify(p.reply_markup))}</span>\n`;
+      });
+      if (r.pending) h += `<span class="mut">waiting for the user's next message → ${esc(r.pending)}</span>\n`;
+      if (r.stdout) h += `<span class="mut">print output:</span>\n${esc(r.stdout)}\n`;
+      if (r.error) h += `<span class="bad">${esc(r.error)}</span>`;
+      if (!h) h = `<span class="mut">The command ran and sent nothing.</span>`;
+      out.innerHTML = h;
+    } catch (e) { out.innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+  };
+}
+
+async function renderLogs() {
+  const draw = async () => {
+    const pane = $("#pane"); if (!pane || S.tab !== "logs") return;
+    const L = await api(`/api/bots/${S.bot.id}/logs`);
+    pane.innerHTML = `<div class="logs">${L.length ? L.map(l =>
+      `<div class="logline lv-${esc(l.level)}">${new Date(l.ts * 1000).toLocaleTimeString()}  ${esc(l.level)}  ${esc(l.text)}</div>`).join("")
+      : `<span class="lv-info">Nothing logged yet. Start the bot and send it a message.</span>`}</div>`;
+  };
+  await draw(); S.timer = setInterval(draw, 4000);
+}
+
+function renderHelp() {
+  $("#pane").innerHTML = `<div class="help">
+  <h2>Writing commands in Python</h2>
+  <p>Each command is a plain Python script. It runs in its own process every time it's triggered and is stopped after 10 seconds.</p>
+  <h3>When a command runs</h3>
+  <p><code>/start</code> runs for that slash command. <code>*</code> runs for any other text. <code>cb:data</code> runs when a button with that data is pressed (<code>cb:*</code> catches the rest).</p>
+  <h3>What's in scope</h3>
+  <pre><code>text      # full message text
+args      # list of words after the command
+data      # button data (for cb: commands)
+message   # the Telegram message (message.text, message["chat"]["id"])
+chat      # chat.id, chat.type
+user      # user.id, user.first_name, user.username
+bot       # your bot
+requests  # HTTP library</code></pre>
+  <h3>Sending</h3>
+  <pre><code>bot.send("Hello")                       # message to the current chat
+bot.reply("Hi", parse_mode="HTML")       # reply to the user's message
+bot.send("Pick one", inline=[[("Yes", "yes"), ("Docs", "https://example.com")]])
+bot.send("Menu", keyboard=[["Help", "About"]])
+bot.photo("https://…/pic.jpg", caption="Look")
+bot.document("https://…/file.pdf")
+bot.edit("New text")                     # edit the message of a pressed button
+bot.answer("Saved", alert=False)         # answer a button press
+bot.call("sendDice", chat_id=chat.id)    # any Bot API method</code></pre>
+  <h3>Remembering things</h3>
+  <pre><code>user.save("score", 10)     # stored per user
+user.get("score", 0)
+bot.save("total", 5)       # stored for the whole bot
+bot.get("total", 0)
+user.delete("score")</code></pre>
+  <p>Values must be JSON-friendly: numbers, text, lists, dicts, true/false.</p>
+  <h3>Asking a question</h3>
+  <pre><code>bot.send("What's your name?")
+wait_next("/got_name")     # the user's next message runs /got_name</code></pre>
+  <h3>Heads-up</h3>
+  <p>Command code can do anything Python can do on the machine running Botbench. Only give panel access to people you trust.</p>
+  </div>`;
+}
+
+// dialogs
+$("#addBot").onclick = () => { $("#tokenIn").value = ""; $("#tokenMsg").textContent = ""; $("#dlgBot").showModal(); $("#tokenIn").focus(); };
+$("#tokenCancel").onclick = () => $("#dlgBot").close();
+$("#tokenOk").onclick = async () => {
+  $("#tokenMsg").textContent = "Checking token…";
+  try {
+    const b = await api("/api/bots", "POST", { token: $("#tokenIn").value });
+    $("#dlgBot").close(); S.cmds = []; S.cmd = null; await loadBots(b.id);
+  } catch (e) { $("#tokenMsg").textContent = e.message; }
+};
+$("#cmdCancel").onclick = () => $("#dlgCmd").close();
+$("#cmdOk").onclick = async () => {
+  try {
+    const c = await api(`/api/bots/${S.bot.id}/commands`, "POST", { name: $("#cmdIn").value });
+    $("#dlgCmd").close(); S.tab = "commands"; await loadCmds(c.id);
+  } catch (e) { $("#cmdMsg").textContent = e.message; }
+};
+["tokenIn", "cmdIn"].forEach(id => $("#" + id).addEventListener("keydown", e => {
+  if (e.key === "Enter") $(id === "tokenIn" ? "#tokenOk" : "#cmdOk").click();
+}));
+
+loadBots();
+</script>
+</body>
+</html>
