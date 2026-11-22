@@ -31,7 +31,7 @@ POOL = ThreadPoolExecutor(max_workers=16)
 def db():
     c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL"); c.execute("PRAGMA busy_timeout=30000")
+    c.execute("PRAGMA busy_timeout=30000"); c.execute("PRAGMA synchronous=NORMAL")
     return c
 
 def q(sql, args=(), one=False, commit=False):
@@ -48,6 +48,8 @@ def q(sql, args=(), one=False, commit=False):
 def init_db():
     with LOCK:
         c = db()
+        try: c.execute("PRAGMA journal_mode=WAL")
+        except Exception: pass
         c.executescript("""
         CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
         CREATE TABLE IF NOT EXISTS bots(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, username TEXT,
@@ -321,7 +323,7 @@ def ensure_admin():
     if not pw:
         pw = secrets.token_urlsafe(14)
         print(f"\n*** First run. Admin password (shown once): {pw}\n")
-    set_setting("admin_hash", generate_password_hash(pw))
+    set_setting("admin_hash", generate_password_hash(pw, method="pbkdf2:sha256:200000"))
 
 FAILS = {}
 @app.before_request
@@ -8356,9 +8358,14 @@ if Ex1 and Ex2:
 
 def seed_builtin(bot_id, overwrite=True):
     """Copy the built-in commands into a bot (they stay editable in the panel)."""
-    for n, c in BUILTIN_COMMANDS.items():
-        if overwrite or not q("SELECT 1 FROM commands WHERE bot_id=? AND name=?", (bot_id, n), one=True):
-            q("INSERT OR REPLACE INTO commands VALUES(?,?,?,?)", (bot_id, n, c, now()), commit=True)
+    verb = "INSERT OR REPLACE" if overwrite else "INSERT OR IGNORE"
+    with LOCK:
+        c = db()
+        try:
+            c.executemany(f"{verb} INTO commands VALUES(?,?,?,?)", [(bot_id, n, code, now()) for n, code in BUILTIN_COMMANDS.items()])
+            c.commit()
+        finally:
+            c.close()
     return len(BUILTIN_COMMANDS)
 
 @app.post("/bot/<int:bid>/commands/builtin")
@@ -8386,7 +8393,7 @@ def register_env_bots():
 # ---------------------------------------------------------------- boot
 init_db(); ensure_admin()
 for _r in q("SELECT id FROM bots WHERE running=1"): start_bot(_r["id"])
-register_env_bots()
+threading.Thread(target=register_env_bots, daemon=True).start()  # never block web boot on Telegram
 
 if __name__ == "__main__":
     app.run(host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 8000)), threaded=True)
