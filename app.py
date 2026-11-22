@@ -1,4 +1,5 @@
 import os, secrets, hmac
+import jinja2
 from functools import wraps
 from flask import Flask, request, jsonify, session, render_template, redirect, send_from_directory
 import core
@@ -11,6 +12,9 @@ if not os.path.exists(secret_file):
     with open(secret_file, "w") as f:
         f.write(secrets.token_hex(32))
 app = Flask(__name__)
+# Pages live in templates/, but also work if the HTML files sit next to app.py
+PAGE_DIRS = [os.path.join(core.BASE, "templates"), core.BASE]
+app.jinja_loader = jinja2.FileSystemLoader(PAGE_DIRS)
 app.secret_key = open(secret_file).read().strip()
 
 
@@ -40,7 +44,10 @@ def bot_view(b):
 def index():
     if not session.get("ok"):
         return render_template("login.html", error=None)
-    return send_from_directory(os.path.join(core.BASE, "templates"), "panel.html")
+    for d in PAGE_DIRS:
+        if os.path.exists(os.path.join(d, "panel.html")):
+            return send_from_directory(d, "panel.html")
+    return "panel.html is missing from the deployment.", 500
 
 
 @app.post("/login")
@@ -176,5 +183,7 @@ def logs(bid):
 
 if __name__ == "__main__":
     core.autostart()
-    app.run(host=os.environ.get("HOST", "127.0.0.1"),
+    # Hosting platforms (Render, Railway...) set PORT and need 0.0.0.0
+    default_host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
+    app.run(host=os.environ.get("HOST", default_host),
             port=int(os.environ.get("PORT", "5000")), threaded=True)
