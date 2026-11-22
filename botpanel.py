@@ -11,6 +11,7 @@ from flask import (Flask, request, session, redirect, url_for, render_template_s
                    abort, Response, flash, get_flashed_messages)
 from markupsafe import Markup
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE, "botpanel.db"))
@@ -21,7 +22,8 @@ if not os.path.exists(KEY_PATH):
 
 app = Flask(__name__)
 app.secret_key = open(KEY_PATH).read().strip()
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # trust Render/nginx proxy headers
+app.config.update(SESSION_COOKIE_NAME="bp_session", SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE") == "1",
                   MAX_CONTENT_LENGTH=20 * 1024 * 1024, PERMANENT_SESSION_LIFETIME=8 * 3600)
 LOCK = threading.RLock()
@@ -329,7 +331,7 @@ FAILS = {}
 @app.before_request
 def guard():
     if request.endpoint == "static": return
-    if request.method == "POST":
+    if request.method == "POST" and request.endpoint != "login":
         tok = request.form.get("_csrf", "")
         if not session.get("csrf") or not hmac.compare_digest(tok, session["csrf"]): abort(400, "Bad CSRF token")
     if request.endpoint not in ("login", "health") and not session.get("auth"):
@@ -394,21 +396,70 @@ def bot_or_404(bid):
     if not b: abort(404)
     return b
 
+def admin_ids():
+    return [x.strip() for x in os.environ.get("ADMIN_TG_ID", "").split(",") if x.strip().lstrip("-").isdigit()]
+
+def otp_token():
+    for t in (x.strip() for x in os.environ.get("BOT_TOKENS", "").split(",")):
+        if t: return t
+    r = q("SELECT token FROM bots ORDER BY id LIMIT 1", one=True)
+    return r["token"] if r else None
+
+def otp_hash(code): return hashlib.sha256((app.secret_key + code).encode()).hexdigest()
+OTP_SENDS = []
+
+LOGIN_TPL = """<div class=card style="max-width:360px;margin:10vh auto"><h1>{{ic('bot')}}Sign in</h1>
+{% if mode=='otp' %}<form method=post><input type=hidden name=action value=send>
+<p class=tag>Telegram OTP login</p><p><button class=btn>{{ic('play')}}{{'Resend OTP' if verify else 'Send OTP to my Telegram'}}</button></p></form>
+{% if verify %}<form method=post><input type=hidden name=action value=verify><p><input name=otp inputmode=numeric pattern="[0-9]{6}" maxlength=6 placeholder="6-digit OTP" autocomplete=one-time-code autofocus required></p>
+<p><button class=btn>Verify &amp; login</button></p></form>{% endif %}
+{% else %}<p class=bad>ADMIN_TG_ID not set - password mode. Set ADMIN_TG_ID (your numeric Telegram id, get it from @userinfobot) to enable OTP login.</p>
+<form method=post><input type=password name=password placeholder=Password autofocus required><p><button class=btn>Login</button></p></form>{% endif %}</div>"""
+
+def do_login():
+    session.clear(); session["auth"] = True; session["csrf"] = secrets.token_hex(16); session.permanent = True
+    FAILS.pop(request.remote_addr, None)
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    ip = request.remote_addr
+    ip, ids, verify = request.remote_addr, admin_ids(), False
     if request.method == "POST":
         n, t = FAILS.get(ip, (0, 0))
         if n >= 5 and time.time() - t < 300: abort(429, "Too many attempts, wait 5 minutes")
-        if check_password_hash(get_setting("admin_hash"), request.form.get("password", "")):
-            session.clear(); session["auth"] = True; session["csrf"] = secrets.token_hex(16); session.permanent = True
-            FAILS.pop(ip, None); return redirect("/")
-        FAILS[ip] = (n + 1, time.time()); flash("Wrong password")
-    return render_template_string(LAYOUT, body=Markup(render_template_string(
-        """<div class=card style="max-width:340px;margin:12vh auto"><h1>{{ic('bot')}}Sign in</h1><form method=post>
-        <input type=hidden name=_csrf value="{{csrf}}"><input type=password name=password placeholder=Password autofocus required>
-        <p><button class=btn>Login</button></p></form></div>""", csrf=session.setdefault("csrf", secrets.token_hex(16)))),
-        nav="", bid=None, bots=[])
+        act = request.form.get("action", "")
+        if not ids:
+            if check_password_hash(get_setting("admin_hash"), request.form.get("password", "")):
+                do_login(); return redirect("/")
+            FAILS[ip] = (n + 1, time.time()); flash("Wrong password")
+        elif act == "send":
+            t0 = time.time(); OTP_SENDS[:] = [x for x in OTP_SENDS if t0 - x < 3600]
+            tok = otp_token()
+            if OTP_SENDS and t0 - OTP_SENDS[-1] < 60: flash("Wait 60 seconds before requesting another OTP"); verify = True
+            elif len(OTP_SENDS) >= 6: flash("Too many OTP requests, try again later")
+            elif not tok: flash("No bot token found. Set BOT_TOKENS.")
+            else:
+                code, ok = f"{secrets.randbelow(10**6):06d}", False
+                for i in ids:
+                    try:
+                        r = tg_call(tok, "sendMessage", {"chat_id": int(i), "parse_mode": "HTML",
+                            "text": f"\U0001F510 BotPanel login OTP: <code>{code}</code>\nValid 5 minutes. Never share it."})
+                        ok = ok or bool(r.get("ok"))
+                    except Exception: pass
+                if ok:
+                    set_setting("otp_hash", otp_hash(code)); set_setting("otp_exp", str(time.time() + 300)); set_setting("otp_tries", "0")
+                    OTP_SENDS.append(t0); flash("OTP sent to your Telegram"); verify = True
+                else: flash("Could not send OTP. Open your bot in Telegram, press Start, and check ADMIN_TG_ID.")
+        elif act == "verify":
+            verify = True; h, exp, tries = get_setting("otp_hash"), float(get_setting("otp_exp") or 0), int(get_setting("otp_tries") or 0)
+            code = re.sub(r"\D", "", request.form.get("otp", ""))
+            if not h or time.time() > exp or tries >= 5: flash("OTP expired or locked - request a new one")
+            else:
+                set_setting("otp_tries", str(tries + 1))
+                if hmac.compare_digest(h, otp_hash(code)):
+                    set_setting("otp_hash", ""); do_login(); return redirect("/")
+                FAILS[ip] = (n + 1, time.time()); flash("Wrong OTP")
+    return render_template_string(LAYOUT, body=Markup(render_template_string(LOGIN_TPL, mode="otp" if ids else "password", verify=verify)),
+                                  nav="", bid=None, bots=[])
 
 @app.post("/logout")
 def logout(): session.clear(); return redirect("/login")
