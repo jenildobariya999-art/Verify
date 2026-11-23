@@ -157,6 +157,12 @@ h2.page{margin:6px 0 16px;font-size:21px}
 .doc pre{background:#000;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0 0;overflow-x:auto;font:13px/1.55 var(--mono);color:#dde6f7;white-space:pre}.doc pre code{background:none;padding:0;color:inherit}
 .prebar{display:flex;gap:14px;flex-wrap:wrap;margin:2px 0 10px}.doc table{border-collapse:collapse;width:100%}.doc td{padding:7px 8px 7px 0;border-top:1px solid var(--line);vertical-align:top}.doc td:first-child{white-space:nowrap}
 a.lr{color:var(--ink);text-decoration:none}
+details.doc{padding:0}details.doc>summary{list-style:none;cursor:pointer;display:flex;gap:10px;align-items:center;justify-content:space-between;padding:13px 14px;font-size:15px}
+details.doc>summary::-webkit-details-marker{display:none}details.doc>summary::after{content:"";width:8px;height:8px;border-right:2px solid #8b8b95;border-bottom:2px solid #8b8b95;transform:rotate(45deg);margin:-3px 4px 0 2px;flex:none;transition:transform .15s}
+details.doc[open]>summary::after{transform:rotate(-135deg);margin-top:3px}details.doc[open]>summary{border-bottom:1px solid var(--line)}
+.dn{flex:1;min-width:0;word-break:break-word;font-weight:600}.dn.mono{font:600 14px var(--mono);color:#c4b5fd}.dcat{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:#9ca3af;background:#1b1b20;border-radius:7px;padding:2px 8px;flex:none}
+.dbody{padding:4px 14px 12px}.doc pre.sig{margin:8px 0 0;background:#0b0b10;color:#a5b4fc}mark{background:#8b5cf655;color:#fff;border-radius:3px;padding:0 1px}
+.chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:0 0 8px;padding-bottom:2px}.chips::-webkit-scrollbar{display:none}.chips .chip{flex:none;font:13.5px var(--sans,inherit)}
 @media(max-width:480px){.erow{grid-template-columns:1fr 1fr}.snip{max-width:48vw}}
 @media(min-width:900px){
   :root{--pad:34px}
@@ -328,8 +334,15 @@ Bot.handleNextCommand("/step2", options={"from": "step1"})   # arrives as option
 job = Bot.runCommandAfter(3600, "/reminder", options="x")    # run in an hour
 Bot.cancelScheduledTask(job["id"])
 raise ReturnCommand                          # stop this command (never use a bare return)</pre><p>Scheduled tasks run only while the bot is running and survive restarts.</p>`},
-{id:"hook",t:"Webhooks and broadcasts",h:`<pre data-name="webhook">url = libs.Webhook.getUrlFor("/PaymentDone", u)    # a signed link to this panel
-# when anything calls that URL (GET or POST), /PaymentDone runs for user u
+{id:"hook",t:"Webhooks and broadcasts",h:`<pre data-name="webhook">webhook = libs.Webhook.getUrlFor(
+    command="/onWebhook",
+    user_id=u
+)
+
+webhook_encoded = rawurlencode(
+    webhook
+)
+# when anything calls that link (GET or POST), /onWebhook runs for user u
 # and options.json holds the JSON body or query values</pre><pre data-name="broadcast">task = Bot.broadcast(function="sendMessage", text="<b>Hello!</b>", parse_mode="HTML",
                      callback_url=libs.Webhook.getUrlFor("/BroadcastDone", u))
 # sends to every user who hasn't blocked the bot (about 20 per second); when it
@@ -362,19 +375,222 @@ bot.send("Hello boss")</pre><h4>Friendly error message (the <code>!</code> comma
 {id:"move",t:"Moving a Telebot Creator (TPY) bot here",h:`<p>TPY is Python, so most code runs unchanged. <b>Settings → Import commands</b> accepts a JSON file, or paste text where each command starts with <code>=== /name ===</code>.</p><ul><li>Buttons stop "loading" by themselves: a button press is answered automatically unless your code calls <code>answerCallbackQuery</code> (for a toast or alert).</li><li>Also works: every Bot API method (<code>bot.anyMethod</code>, positional arguments in TBC's order, files such as <code>Bot.getBotUsersFile()</code>), <code>Bot.getBroadcastStatus/stopBroadcast/pauseBroadcast/resumeBroadcast/setBroadcastSpeed</code>, <code>Bot.getStats</code>, <code>Bot.blockUser</code>, <code>Bot.log</code>, <code>Bot.stop()</code>, <code>Account.saveData</code> and <code>Account.start_bot/stop_bot/restart_bot</code> for bots in this panel, webhooks with CORS (<code>options.json/ip/headers</code>).</li><li>Works: <code>bot.*</code>, <code>Bot.*</code>, <code>User.*</code> (including <code>user=</code>), <code>libs.Resources</code>, <code>libs.DateAndTime</code>, <code>libs.Random</code>, <code>libs.Webhook</code>, <code>HTTP</code>, <code>handleNextCommand</code>, <code>runCommand</code>, <code>runCommandAfter</code>, <code>Bot.broadcast</code>, <code>@ ~ ! *</code>, <code>/handler_*</code>, telebot keyboard types.</li><li>Your <b>data does not move by itself</b>. Recreate bot data (for example admin IDs) in Admin → Bot Data, or import a backup.</li><li>Not available: anything that talks to the Telebot Creator account (<code>Account.*</code>, <code>Bot.info(bot_id=…, api_key=…)</code>, reading another bot's data, <code>libs.tbcads</code> ads, crypto libraries). Ads reward instantly; the rest raises a clear error.</li><li>Telegram links in <code>HTTP.get("https://api.telegram.org/…")</code> work normally.</li></ul>`},
 {id:"fix",t:"Troubleshooting",h:`<ul><li><b>Bot doesn't answer</b>: Intro shows Active? Only one program may poll a token: stop the same bot on other hosts first.</li><li><b>"Stopped: ran longer than 10 seconds"</b>: a loop or slow HTTP call. Raise <code>EXEC_TIMEOUT</code> or move work to <code>runCommandAfter</code>.</li><li><b>NameError / AttributeError</b>: see Errors for the line. <code>message.photo</code> is None for text messages, so check first.</li><li><b>Button does nothing</b>: callback data must match a command name (or <code>cb:name</code>), and data is limited to 64 characters.</li><li><b>Webhook link says localhost</b>: set <code>PUBLIC_URL</code> to your site's address.</li></ul>`}
 ];
+/* API reference: [category, name, signature, description, example, extra search words]. [[x]] shows as code. */
+const REF=[
+["Webhook","libs.Webhook.getUrlFor","libs.Webhook.getUrlFor(command, user_id=u)","Returns a signed link to this panel. When anything calls it (a browser, a payment gateway, another server; GET or POST), [[command]] runs for [[user_id]] and receives the request as [[options]]. It needs a public HTTPS address ([[PUBLIC_URL]]). A link that was changed or made for another command or user is rejected.",
+`# command: /Verify
+webhook = libs.Webhook.getUrlFor(
+    command="/onWebhook",
+    user_id=u
+)
+
+webhook_encoded = rawurlencode(
+    webhook
+)
+
+page = "https://example.com/verify?webhookUrl=" + webhook_encoded + "&botId=" + bot_id
+m = InlineKeyboardMarkup()
+m.add(InlineKeyboardButton("Verify now", url=page))
+bot.sendMessage("Tap the button to verify", reply_markup=m)`,"callback url link hook verification verify captcha"],
+["Webhook","options in a webhook command","options.json  options.query  options.method  options.ip  options.headers","What the command receives when its webhook link is called. [[options.json]] is the JSON body (or the form / query values), [[options.query]] the URL query, [[options.method]] GET or POST, [[options.ip]] the caller's IP, [[options.headers]] a few headers (User-Agent, Origin, Referer). [[u]] is the user the link was made for.",
+`# command: /onWebhook
+data = options.json if options else None
+if not data:
+    raise ReturnCommand
+print(options.method, options.ip)
+User.saveData("verified", True)
+User.saveData("fingerprint", data.get("fingerprint"))
+bot.sendMessage("✅ Verified")`,"request body payload response"],
+["Webhook","rawurlencode / encodeURIComponent","rawurlencode(text)   encodeURIComponent(text)   decodeURIComponent(text)","Percent-encode text so it is safe inside a URL. Use it when you put one link inside another, for example a webhook link as a [[webhookUrl=]] parameter.",
+`# command: /encode-demo
+webhook = libs.Webhook.getUrlFor(command="/onWebhook", user_id=u)
+webhook_encoded = rawurlencode(webhook)
+bot.sendMessage(webhook_encoded, parse_mode=None)`,"url escape quote parse_qs"],
+["Webhook","Payment gateway callback","libs.Webhook.getUrlFor(\"/PaymentDone\", u)","A gateway can call your webhook when a payment finishes. Create the link when the user starts paying, pass it to the gateway as the callback URL, and credit the balance in the command it calls.",
+`# command: /PaymentDone
+d = options.json or {}
+if str(d.get("status")).lower() == "success":
+    libs.Resources.anotherRes("Balance", user=u).add(float(d.get("amount", 0)))
+    bot.sendMessage("✅ Payment received")`,"money deposit upi balance wallet"],
+["Webhook","Webhook security, CORS and public address","PUBLIC_URL  /hook/<bot id>","Webhook links are signed per command and per user, so they cannot be guessed. The endpoint accepts GET, POST, PUT and OPTIONS and allows any website to call it (CORS), so a web page can post to it from the visitor's browser. Telegram Mini Apps and most gateways need HTTPS: set [[PUBLIC_URL]] to your https address (detected automatically on Render).","","cors https domain ssl localhost public"],
+["Webhook","Bot.broadcast callback_url","Bot.broadcast(function, callback_url=url, **params)","When a broadcast finishes, the command in [[callback_url]] runs with [[options.json]] = total, total_success, total_errors. See Broadcast.","","finished done result"],
+
+["Account","Account.saveData / getData / deleteData","Account.saveData(name, data)   Account.getData(name)   Account.deleteData(name)","Account-wide storage shared by every bot in this panel (not tied to one bot or one user). Good for settings that all your bots use.",
+`# command: /acc-demo
+Account.saveData("support_chat", "@mysupport")
+bot.sendMessage("Support: " + str(Account.getData("support_chat")))`,"accounts account data panel global shared"],
+["Account","Account.start_bot / stop_bot / restart_bot","Account.start_bot(botid)   Account.stop_bot(botid)   Account.restart_bot(botid)","Start, stop or restart a bot of this panel from a command. The current bot's ID is [[bot_id]]. A stop takes effect within a second. Only bots in this panel can be controlled.",
+`# command: /restart-me
+bot.sendMessage("Restarting…")
+Account.restart_bot(bot_id)`,"accounts account control manage"],
+["Account","Account.get_bots_list / get_bot_status","Account.get_bots_list()   Account.get_bot_status(botid)","List the bots in this panel (botid, name, username, status) or ask if one is \"working\" or \"stopped\".",
+`# command: /bots
+for b in Account.get_bots_list():
+    bot.sendMessage(f"{b.name} @{b.username}: {b.status}")`,"accounts account list status"],
+["Account","Bot.info()","Bot.info()   bot.info()   bot.getMe()","Facts about this bot: [[bot_id]], [[name]], [[username]], [[token]], [[status]]. Works without arguments only; reading another bot's info needs Telebot Creator.",
+`# command: /about
+i = Bot.info()
+bot.sendMessage(f"I am @{i.username} (id {i.bot_id})")`,"accounts bot username token profile"],
+["Account","User data (a user's account)","User.saveData(name, data, user=None)   User.getData(name, user=None)","Each user has their own data. Without [[user=]] it is the user who wrote to the bot; with [[user=ID]] you read or write someone else's. Typical keys: balance, referrer, wallet, registered.",
+`# command: /register
+if User.getData("registered"):
+    bot.sendMessage("You already have an account")
+    raise ReturnCommand
+User.saveData("registered", True)
+User.saveData("joined", libs.DateAndTime.now("Asia/Kolkata")["date"])
+bot.sendMessage("Account created ✅")`,"accounts account user profile register login balance wallet"],
+["Account","Balances with libs.Resources","libs.Resources.anotherRes(name, user=None)   libs.Resources.globalRes(name)","A counter per user (or for the whole bot): [[.value()]], [[.add(n)]], [[.cut(n)]], [[.set(n)]], [[.reset()]]. Use it for balances, points and limits.",
+`# command: /balance
+b = libs.Resources.anotherRes("Balance", user=u)
+b.add(10)
+bot.sendMessage("Balance: " + str(b.value()))`,"accounts account balance wallet points money coins"],
+["Account","Panel login and password","PANEL_PASSWORD","The panel has one login. Its password is the [[PANEL_PASSWORD]] setting (Render: Environment; VPS: /etc/botbench.env). Change it there and restart. Anyone with the password can run code, so keep it private and use a long one.","","accounts login sign in password security admin panel"],
+["Account","Bot token and updating it","bot_token   Settings → Update token","The token of the current bot is in [[bot_token]]. To replace it (after revoking in @BotFather) use Settings → Update token; it must belong to the same bot. Keep tokens out of commands: put them in Manage → Environment variables.","","accounts token botfather revoke secret"],
+["Account","Clone, export, transfer","Settings → Clone bot / Export bot","Clone copies all commands and data to another bot token. Export gives JSON, YAML or TXT. Transferring a bot to another account is not available because the panel has a single owner.","","accounts clone copy move transfer ownership"],
+["Account","Not available: Telebot Creator account functions","Account.get_bot_data, Account.set_bot_data, Bot.info(bot_id=…, api_key=…) …","Functions that talk to the Telebot Creator platform (other accounts, API keys, other bots' data, ads, crypto libraries) raise a clear error here. Use Account.saveData for shared data and Backup/Restore to move data.","","accounts unsupported error tbc telebot creator api_key"],
+
+["Data","Bot.getData / saveData / deleteData","Bot.saveData(name, data)   Bot.getData(name)   Bot.deleteData(name)   Bot.setData(name, data)","Data shared by the whole bot. [[getData]] returns None when missing. Anything JSON-friendly works: numbers, text, lists, dicts, True/False. Edit it in Admin → Bot Data.",
+`# command: /counter
+n = (Bot.getData("hits") or 0) + 1
+Bot.saveData("hits", n)
+bot.sendMessage(f"Hits so far: {n}")`,"save store settings admin"],
+["Data","User.getData / saveData / deleteData","User.saveData(name, data, user=None)   User.getData(name, user=None)   User.deleteData(name, user=None)","Data of one user. Add [[user=ID]] to work on someone else.","","per user profile"],
+["Data","Short forms","user.save / user.get / bot.save / bot.get","[[user.save(key, value)]], [[user.get(key, default)]], [[bot.save]], [[bot.get]] do the same as User and Bot. [[user.id]], [[user.first_name]] and [[user.username]] hold the sender's details.","",""],
+["Data","Bot.getAllData / getDataFile / getBotUsersFile","Bot.getAllData()   Bot.getDataFile(name)   Bot.getBotUsersFile(\"csv\", True, True)","Returns a file you can send with [[sendDocument]]: all bot data, one value, or the list of users (json, csv or txt; optional creation and last-active dates).",
+`# command: /export-users
+bot.sendDocument(document=Bot.getBotUsersFile("csv", True, True), caption="Users")`,"backup export download file users"],
+["Data","User.getAllData / getDataFile","User.getAllData()   User.getDataFile(name, user=u)","Files with the data of all users, or one value of one user.","","export backup"],
+["Data","libs.Resources","anotherRes(name, user)  userRes(name)  globalRes(name)","Numeric counters. See Balances with libs.Resources.","","balance counter points"],
+
+["Messages","bot.send / reply / photo / document / edit / answer","bot.send(text, inline=…, keyboard=…)","The short helpers. [[inline=[[(\"Text\",\"data\"),(\"Link\",\"https://…\")]]]] makes buttons, [[keyboard=[[\"A\",\"B\"]]]] a reply keyboard. [[bot.edit(text)]] edits the message a button was on, [[bot.answer(text, alert=False)]] answers a button press.",
+`# command: /menu
+bot.send("Pick one", inline=[[("Yes", "yes"), ("Open site", "https://example.com")]])`,"send message buttons keyboard"],
+["Messages","bot.sendMessage / replyText","bot.sendMessage(text, **options)   bot.replyText(chat_id, text, **options)","Sends text and returns the sent message ([[sent.message_id]]). [[sendMessage]] goes to the current chat; [[replyText]] to the [[chat_id]] you give. Text is sent as HTML unless you pass [[parse_mode=None]] or [[\"\"]]. Options follow the Telegram API: reply_markup, link_preview_options, reply_to_message_id …",
+`# command: /hi
+sent = bot.sendMessage("<b>Hello</b> " + (user.first_name or ""))
+bot.replyText(u, "Message " + str(sent.message_id) + " sent")`,"html parse_mode text bold emoji tg-emoji"],
+["Messages","HTML formatting","<b> <i> <u> <s> <code> <pre> <a href> <tg-spoiler> <tg-emoji emoji-id>","HTML is the default. Escape user text that may contain &lt; &gt; &amp; with [[import html; html.escape(text)]]. To keep a user's own formatting use [[apply_html_entities(text, entities, {})]].",
+`# command: /echo
+bot.sendMessage(apply_html_entities(message.text, message.entities, {}))`,"format bold italic markdown entities"],
+["Messages","bot.sendPhoto / sendVideo / sendDocument / sendAudio …","bot.sendPhoto(photo, caption=…)   bot.sendDocument(document=…)","Media from a file_id, a URL or a file object. Positional arguments follow the Telegram order. Captions are HTML by default.","","media image video file upload photo"],
+["Messages","bot.editMessageText / deleteMessage / copyMessage","bot.editMessageText(text, chat_id, message_id)   bot.deleteMessage(chat_id, message_id)   bot.copyMessage(chat_id, from_chat_id, message_id)","In a button command the chat and message default to the pressed button's message. \"message is not modified\" is ignored.",
+`# command: /next
+bot.editMessageText("Page 2", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("Back", callback_data="/menu")))`,"edit change update delete remove copy forward"],
+["Messages","bot.replyTo / getChatMember / any Telegram method","bot.replyTo(message, text)   bot.getChatMember(chat_id, user_id)   bot.anyMethodName(…)","Every Telegram Bot API method works as [[bot.method(...)]] (camelCase or snake_case) and returns its result. Errors raise an exception: wrap in try/except when failing is fine.",
+`# command: /join-check
+m = bot.getChatMember(chat_id="@mychannel", user_id=u)
+bot.sendMessage("Status: " + str(m.status))`,"telegram api chat member channel subscribe getme invite link createChatInviteLink"],
+["Messages","Files: getFileUrl, downloadFile","bot.getFileUrl(file_id)   bot.downloadFile(file_path)","Get a download link or the bytes of a file a user sent.","","download photo document file_id"],
+["Buttons","InlineKeyboardMarkup / InlineKeyboardButton","InlineKeyboardMarkup(row_width=3).add(...)   .row(...)","Telebot-style buttons. [[callback_data]] runs the command with that name (up to 64 characters); [[url]] opens a link; [[web_app]] opens a Mini App.",
+`# command: /buttons
+m = InlineKeyboardMarkup(row_width=2)
+m.add(InlineKeyboardButton("Join", url="https://t.me/example"), InlineKeyboardButton("Done", callback_data="/Check"))
+m.row(InlineKeyboardButton("Back", callback_data="/start"))
+bot.sendMessage("Join first", reply_markup=m)`,"inline button keyboard callback url"],
+["Buttons","ReplyKeyboardMarkup / KeyboardButton / ReplyKeyboardRemove","ReplyKeyboardMarkup(resize_keyboard=True).add(...)","A keyboard under the message box. Each button sends its text, which runs the command with that name (for example a command called [[Link Wallet]]).",
+`# command: /kb
+k = ReplyKeyboardMarkup(resize_keyboard=True)
+k.add("Balance", "Withdraw")
+k.row(KeyboardButton("Share contact", request_contact=True))
+bot.sendMessage("Menu", reply_markup=k)`,"reply keyboard menu contact location"],
+["Buttons","Button presses and loading","call.data   bot.answerCallbackQuery(text, show_alert)","A button press is answered automatically, so the button stops \"loading\". Call [[answerCallbackQuery]] yourself only to show a toast or an alert. [[call]] (same as [[message]]) holds [[call.data]] and [[call.message]].","","spinner callback_query loading answer alert toast"],
+
+["Flow","Bot.handleNextCommand","Bot.handleNextCommand(command, options=None)","The user's next message runs [[command]] instead of normal matching; [[options]] arrives in that command. A new slash command cancels the wait.",
+`# command: /ask
+bot.sendMessage("Your UPI ID?")
+Bot.handleNextCommand("/got-upi", options={"step": 1})`,"ask input wait next message conversation wizard"],
+["Flow","Bot.runCommand","Bot.runCommand(command, options=None)","Runs another command right now. [[params]] is \"None\" unless you add words: [[Bot.runCommand(\"/Menu page2\")]].","","call other command include"],
+["Flow","Bot.runCommandAfter / cancelScheduledTask","Bot.runCommandAfter(seconds, command, options=None, id=None)   Bot.cancelScheduledTask(id)","Runs a command later for the same user. Survives restarts and runs only while the bot is running.",
+`# command: /remind
+job = Bot.runCommandAfter(3600, "/reminder", options="drink water")
+User.saveData("job", job["id"])`,"timer schedule delay later cron reminder"],
+["Flow","ReturnCommand","raise ReturnCommand","Stops the current command quietly. Use it after sending an error message. A plain [[return]] is not allowed outside a function.","","stop exit return halt"],
+["Special","@  ~  !  *","commands named @, ~, ! and *","[[@]] runs before every command (raise ReturnCommand to block: bans, force-join, bot off). [[~]] is code added to the top of every command. [[!]] runs when a command crashes ([[options]] = error text). [[*]] runs for any text no command matches.",
+`# command: @
+if Bot.getData(f"{u}ban"):
+    bot.sendMessage("🚫 You are banned")
+    raise ReturnCommand`,"gate middleware before ban force join error handler fallback"],
+["Special","How commands match","name → text","The slash is optional and case does not matter, but an exact match wins: [[/Bonus]] and [[Bonus]] can both exist. Names may have spaces or emoji. [[cb:data]] answers a button. Extra words become [[params]] and [[args]]. A button with data [[/Menu page2]] runs [[/Menu]] with params \"page2\".","","name slash command match trigger button text"],
+["Special","handler_* commands","/handler_special_updates   /handler_my_chat_member   /handler_chat_join_request","Commands for updates that are not messages or buttons. [[update_type]] tells you which one it is.",
+`# command: /handler_chat_join_request
+bot.approveChatJoinRequest(message.chat.id, message.from_user.id)`,"join request channel member left kicked blocked inline query poll"],
+["Special","Variables in every command","u  message  call  msg  params  args  options  update_type  bot_id  bot_token","[[u]] the user's ID, [[message]] the Telegram message (for buttons the callback), [[msg]] the text, [[params]]/[[args]] the words after the command, [[options]] values from webhook, runCommand, handleNextCommand or schedules, [[update_type]] the kind of update. Manage → Environment variables are also globals.","","scope globals user id text"],
+
+["Broadcast","Bot.broadcast","Bot.broadcast(function=\"sendMessage\", callback_url=None, **params)","Sends one Telegram call to every user who has not blocked the bot (about 20 per second) and returns [[{\"broadcast_id\": …}]]. [[function]] is a Telegram method name; [[params]] are its arguments (chat_id is filled in for each user).",
+`# command: /announce
+task = Bot.broadcast(
+    function="sendMessage",
+    text="<b>Update!</b> New offers today",
+    callback_url=libs.Webhook.getUrlFor("/BroadcastDone", u),
+)
+User.saveData("last_broadcast", task["broadcast_id"])`,"send all users announcement mass message newsletter"],
+["Broadcast","Bot.getBroadcastStatus and controls","Bot.getBroadcastStatus(id)   stopBroadcast   pauseBroadcast   resumeBroadcast   setBroadcastSpeed(id, per_second)   rerunBroadcast   listBroadcasts()","Status has [[status]] (queued, running, paused, stopped, completed), [[total_users]], [[total_success]], [[total_errors]] and [[progress]]. The panel's Admin → Broadcasts also lists messages sent from there.",
+`# command: /bc-status
+s = Bot.getBroadcastStatus(User.getData("last_broadcast"))
+bot.sendMessage(f"{s.status}: {s.total_success}/{s.total_users} ({s.progress}%)")`,"progress stop pause resume speed"],
+["Users","Bot.getStats / blockUser / getBlockedUsers","Bot.getStats([1,7,30])   Bot.blockUser(id)   Bot.unblockUser(id)   Bot.getBlockedUsers()","Counts of total, blocked, active and new users over days. Blocked (banned) users are ignored by the bot.",
+`# command: /ban
+Bot.blockUser(int(params))
+bot.sendMessage("Banned " + params)`,"statistics ban unban admin users count active"],
+["Users","MembershipCheck","MembershipCheck([\"@channel1\", \"@channel2\"], user_id)","True only if the user is in every listed chat.",
+`# command: /check
+if not MembershipCheck(["@mychannel"], u):
+    bot.sendMessage("Please join @mychannel first")
+    raise ReturnCommand`,"force join subscribe channel group"],
+
+["Libs","libs.DateAndTime.now","libs.DateAndTime.now(\"Asia/Kolkata\")","Current time with [[date]] (YYYY-MM-DD), [[time]] (HH:MM:SS), [[timestamp]], [[weekday]] and parts.","","date time clock timezone today"],
+["Libs","libs.Random","randomInt(a, b)  randomStr(n)  randomChoice(list)  randomWeightedChoice(items, weights)","Random numbers, strings and choices.","","random lottery code captcha"],
+["Libs","HTTP.get / HTTP.post","HTTP.get(url, params=…, headers=…).json()","Call web APIs. Returns a [[requests]] response ([[.json()]], [[.text]], [[.status_code]]). Time limit 8 seconds per call.",
+`# command: /price
+r = HTTP.get("https://api.example.com/price", params={"coin": "btc"})
+bot.sendMessage(str(r.json().get("price")))`,"api request fetch url json website"],
+["Libs","Helpers","bunchify  isNumeric  md5  base64  re  json  time  random","[[bunchify(dict)]] gives attribute access, [[isNumeric(x)]] checks numbers. [[re]], [[json]], [[time]], [[base64]], [[hashlib]], [[random]] and [[requests]] are ready; any installed Python module can be imported.","","utility regex"],
+["Libs","libs.tbcads","libs.tbcads.reward_ad(…)","Rewarded ads are a Telebot Creator feature. Here the reward is granted at once, so code that waits for an ad continues.","","ads monetization reward"],
+
+["Panel","Environment variables","Manage → Environment variables","NAME=value pairs become globals in every command (APP_URL, ADMIN_IDS …). Mark a row [[raw]] for numbers, lists or {…}. Good place for API keys and tokens.",
+`# command: /show-env
+bot.sendMessage("Support is " + str(globals().get("SUPPORT_CHAT", "not set")))`,"settings config secret key token"],
+["Panel","Backup and restore","More → Backup / Restore","Full backup of all bots with data, commands only, users only (JSON or CSV), commands as .py files, or the whole database. Restore reads a backup file. Backups hold tokens and user data: keep them private.","","export import download move migrate render hostinger"],
+["Panel","Errors tab","Errors","Every crash with the command, line number and time, plus Telegram errors (blocked user, bad HTML). Use Clear after fixing.","","debug problem fail line traceback"],
+["Panel","Search and replace in code","Search tab","Finds text across all commands with Aa (match case), |ab| (whole word) and .* (regex). Replace All changes every match, so search first.","","find rename refactor"],
+["Panel","Mini App","Mini App tab","Write the page that opens inside Telegram and set it as the bot's menu button. It is served at /m/<bot id> and needs HTTPS.","","web app html telegram webapp"],
+["Panel","Folders and select mode","Commands tab","Group commands in folders (gear icon), select several to move or delete.","","organize"],
+["Panel","Run test","wand icon in the editor","Runs the code with sample input. Nothing is sent to Telegram and nothing is saved. Use it before saving big changes.","","try preview dry run"],
+];
+const REF_CATS=["Webhook","Account","Data","Messages","Buttons","Flow","Special","Broadcast","Users","Libs","Panel"];
 const stripTags=h=>h.replace(/<[^>]+>/g," ").toLowerCase();
+const inl=s=>s.replace(/\[\[(.+?)\]\]/g,(_,c)=>`<code>${c}</code>`);
+const plainInl=s=>s.replace(/\[\[(.+?)\]\]/g,"$1");
+function hiWords(text,words){let h=esc(text);if(!words.length)return h;const re=new RegExp("("+words.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&").replace(/&/g,"&amp;")).join("|")+")","gi");return h.replace(new RegExp("(&[a-z]+;)|"+re.source,"gi"),(m,ent)=>ent?ent:`<mark>${m}</mark>`)}
+function docMatches(){
+  const words=(S.dq||"").toLowerCase().split(/\s+/).filter(Boolean);
+  const items=[];
+  REF.forEach((r,i)=>{const [cat,name,sig,desc,ex,tags]=r,hay=(cat+" "+name+" "+sig+" "+plainInl(desc)+" "+(ex||"")+" "+(tags||"")).toLowerCase();
+    if(S.dcat&&S.dcat!="Guides"&&S.dcat!=cat)return;if(S.dcat=="Guides")return;
+    if(words.every(w=>hay.includes(w))){const nm=(name+" "+sig).toLowerCase();items.push({t:"ref",i,score:words.reduce((a,w)=>a+(nm.includes(w)?3:0)+((tags||"").toLowerCase().includes(w)?2:0)+(cat.toLowerCase().includes(w)?1:0),0)})}});
+  DOCS.forEach((d,i)=>{if(S.dcat&&S.dcat!="Guides")return;const hay=(d.t+" "+stripTags(d.h)).toLowerCase();
+    if(words.every(w=>hay.includes(w)))items.push({t:"guide",i,score:words.reduce((a,w)=>a+(d.t.toLowerCase().includes(w)?3:0),0)})});
+  if(words.length)items.sort((a,b)=>b.score-a.score);
+  return {items,words}}
 function vDocs(){
-  const q=(S.dq||"").toLowerCase(),L=DOCS.filter(d=>!q||(d.t.toLowerCase()+stripTags(d.h)).includes(q));
-  frame(`<div class="seg-row"><button class="circ" id="db" aria-label="Back to More">${I.back}</button><div class="field grow" style="min-height:42px">${I.search}<input id="dsq" placeholder="Search the docs" value="${esc(S.dq||"")}"></div></div>
-  ${L.map(d=>`<section class="card doc" id="d-${d.id}"><h3>${esc(d.t)}</h3>${d.h}</section>`).join("")||'<div class="empty">Nothing in the docs matches that.</div>'}`);
+  S.dcat??="";const {items,words}=docMatches(),searching=words.length>0,openAll=searching&&items.length<=6;
+  const card=it=>{if(it.t=="guide"){const d=DOCS[it.i];return `<details class="card doc" ${openAll||!searching&&false?"open":""} id="d-${d.id}"><summary><span class="dn">${hiWords(d.t,words)}</span><span class="dcat">Guide</span></summary><div class="dbody">${d.h}</div></details>`}
+    const [cat,name,sig,desc,ex]=REF[it.i];
+    return `<details class="card doc" ${openAll?"open":""}><summary><span class="dn mono">${hiWords(name,words)}</span><span class="dcat">${cat}</span></summary><div class="dbody"><pre class="sig">${hiWords(sig,words)}</pre><p>${inl(hiWords(plainInl(desc),words)).replace(/<code><mark>/g,"<code>").replace(/<\/mark><\/code>/g,"</code>")}</p>${ex?`<pre data-name="${esc((ex.match(/^# command: (.+)$/m)||[])[1]||"")}">${esc(ex)}</pre>`:""}</div></details>`};
+  const chips=["",...REF_CATS,"Guides"].map(c=>`<button class="chip ${S.dcat==c?"on":""}" data-c="${c}">${c||"All"}</button>`).join("");
+  frame(`<div class="seg-row"><button class="circ" id="db" aria-label="Back to More">${I.back}</button><div class="field grow" style="min-height:42px">${I.search}<input id="dsq" placeholder="Search docs: account, webhook, balance, broadcast…" value="${esc(S.dq||"")}" autocomplete="off"></div></div>
+  <div class="chips">${chips}</div>
+  <p class="mut" style="margin:4px 2px 10px;font-size:13.5px">${searching?`${items.length} result${items.length==1?"":"s"} for “${esc(S.dq)}”`:`${REF.length} reference entries and ${DOCS.length} guides. Try “account”, “webhook”, “balance”, “button loading”.`}</p>
+  ${items.length?items.map(card).join(""):'<div class="empty">Nothing matches. Try a shorter word such as “webhook”, “account” or “send”.</div>'}`);
   $("#db").onclick=()=>{S.more="menu";render()};
   $("#dsq").oninput=e=>{S.dq=e.target.value;vDocs();const i=$("#dsq");i.focus();i.setSelectionRange(S.dq.length,S.dq.length)};
-  document.querySelectorAll(".doc pre").forEach(pre=>{
-    const code=pre.textContent,bar=document.createElement("div");bar.className="prebar";
-    bar.innerHTML=`<button class="lnk" data-a="c">${I.copy} Copy</button>${S.bot&&pre.dataset.name?`<button class="lnk" data-a="a">${I.plus} Add as command “${esc(pre.dataset.name)}”</button>`:""}`;
+  document.querySelectorAll(".chips .chip").forEach(b=>b.onclick=()=>{S.dcat=b.dataset.c;vDocs()});
+  document.querySelectorAll(".doc pre[data-name]").forEach(pre=>{
+    const code=pre.textContent,nm=pre.dataset.name,body=code.replace(/^# command: .+\n/,""),bar=document.createElement("div");bar.className="prebar";
+    bar.innerHTML=`<button class="lnk" data-a="c">${I.copy} Copy</button>${S.bot&&nm?`<button class="lnk" data-a="a">${I.plus} Add as command “${esc(nm)}”</button>`:""}`;
     pre.after(bar);
-    bar.querySelector('[data-a="c"]').onclick=async()=>{try{await navigator.clipboard.writeText(code);toast("Copied")}catch{toast("Copy isn't allowed in this browser")}};
-    const add=bar.querySelector('[data-a="a"]');if(add)add.onclick=async()=>{try{await api(`/api/bots/${S.bot.id}/commands`,"POST",{name:pre.dataset.name,code});S.cmds=await api(`/api/bots/${S.bot.id}/commands`);toast(`Added to @${S.bot.username}`)}catch(e){toast(e.message)}};
+    bar.querySelector('[data-a="c"]').onclick=async()=>{try{await navigator.clipboard.writeText(body);toast("Copied")}catch{toast("Copy isn't allowed in this browser")}};
+    const add=bar.querySelector('[data-a="a"]');if(add)add.onclick=async()=>{try{await api(`/api/bots/${S.bot.id}/commands`,"POST",{name:nm,code:body});S.cmds=await api(`/api/bots/${S.bot.id}/commands`);toast(`Added to @${S.bot.username}`)}catch(e){toast(e.message)}};
   })}
 
 /* ---------- More ---------- */
