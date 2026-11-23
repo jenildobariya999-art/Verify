@@ -836,5 +836,11 @@ core.autostart()          # bots that were running (and new ones) come back on t
 if __name__ == "__main__":
     # Hosting platforms (Render, Railway...) set PORT and need 0.0.0.0
     default_host = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
-    app.run(host=os.environ.get("HOST", default_host),
-            port=int(os.environ.get("PORT", "5000")), threaded=True)
+    host = os.environ.get("HOST", default_host)
+    port = int(os.environ.get("PORT", "5000"))
+    try:                                   # production server when installed (pip install waitress)
+        from waitress import serve
+        print(f"Botbench on http://{host}:{port}")
+        serve(app, host=host, port=port, threads=16)
+    except ImportError:
+        app.run(host=host, port=port, threaded=True)

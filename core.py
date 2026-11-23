@@ -452,7 +452,10 @@ def _run_broadcast(job):
     for uid in users:
         try:
             if job["function"]:
-                tg(bot["token"], _camel(job["function"]), **{**kw, "chat_id": uid})
+                fn = _camel(job["function"])
+                extra = {"parse_mode": "HTML"} if fn in ("sendMessage", "sendPhoto", "sendVideo", "sendAnimation",
+                         "sendDocument", "sendAudio", "sendVoice") and "parse_mode" not in kw and "entities" not in kw else {}
+                tg(bot["token"], fn, **{**extra, **kw, "chat_id": uid})
             else:
                 fire_hook(bot, job["command"], uid, kw)
             ok += 1

@@ -393,6 +393,8 @@ def run_job(p):
            "getChatAdministrators": ["chat_id"]}
     ALIAS = {"replyText": "sendMessage", "replyPhoto": "sendPhoto", "getChatMembersCount": "getChatMemberCount",
              "kickChatMember": "banChatMember"}
+    HTML_DEFAULT = {"sendMessage", "editMessageText", "editMessageCaption", "sendPhoto", "sendVideo", "sendAnimation",
+                    "sendDocument", "sendAudio", "sendVoice", "copyMessage"}
     DEFAULT_CHAT = {"sendChatAction", "sendDice", "editMessageText", "editMessageCaption", "editMessageReplyMarkup",
                     "sendMediaGroup", "stopPoll"}
 
@@ -447,6 +449,10 @@ def run_job(p):
                 kw.setdefault("callback_query_id", ctx.get("callback_query_id"))
             if "text" in kw and kw["text"] is not None:
                 kw["text"] = str(kw["text"])
+            # Like Telebot Creator: HTML is the default. Pass parse_mode=None for plain text.
+            if method in HTML_DEFAULT and ("text" in kw or "caption" in kw) and "parse_mode" not in kw \
+                    and "entities" not in kw and "caption_entities" not in kw:
+                kw["parse_mode"] = "HTML"
             return tgcall(method, **kw)
 
         def info(self, *a, **k):
@@ -454,7 +460,7 @@ def run_job(p):
                       "username": BOT.get("username"), "token": TOKEN, "status": "working"})
 
         # --- panel-native helpers ---
-        def send(self, text, chat_id=None, parse_mode=None, inline=None, keyboard=None, remove_keyboard=False,
+        def send(self, text, chat_id=None, parse_mode="HTML", inline=None, keyboard=None, remove_keyboard=False,
                  reply=False, **extra):
             if reply and ctx.get("message_id"):
                 extra["reply_to_message_id"] = ctx["message_id"]
@@ -470,7 +476,7 @@ def run_job(p):
         def document(self, document, caption=None, chat_id=None, inline=None, **extra):
             return self.sendDocument(document=document, caption=caption, chat_id=chat_id or CHAT, reply_markup=markup(inline), **extra)
 
-        def edit(self, text, inline=None, parse_mode=None):
+        def edit(self, text, inline=None, parse_mode="HTML"):
             return self.editMessageText(text=text, parse_mode=parse_mode, reply_markup=markup(inline))
 
         def answer(self, text=None, alert=False):
