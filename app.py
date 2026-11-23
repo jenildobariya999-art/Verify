@@ -34,8 +34,8 @@ def norm_name(name):
 
 
 def _exists(bid, name, exclude=None):
-    k = core.nkc(name)
-    return any(core.nkc(r["name"]) == k for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
+    k = core.nraw(name)
+    return any(core.nraw(r["name"]) == k for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
                if r["id"] != exclude)
 
 
@@ -418,7 +418,7 @@ def import_cmds(bid):
         if not name:
             continue
         hit = next((r for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
-                    if core.nkc(r["name"]) == core.nkc(name)), None)
+                    if core.nraw(r["name"]) == core.nraw(name)), None)
         if hit:
             core.run("UPDATE commands SET code=? WHERE id=?", (c.get("code", ""), hit["id"]))
             updated += 1
@@ -809,20 +809,28 @@ def mini_menu(bid):
     return jsonify(ok=True, url=url)
 
 
-@app.route("/hook/<int:bid>", methods=["GET", "POST"])
+@app.route("/hook/<int:bid>", methods=["GET", "POST", "PUT", "OPTIONS"])
 def webhook(bid):
-    """Target of libs.Webhook.getUrlFor(): runs a command with the request body as options.json."""
+    """Target of libs.Webhook.getUrlFor(): runs a command with the request as options (json, query, headers, ip).
+    CORS is open so a web page (for example a verification page) can call it from the visitor's browser."""
     import hmac as _h
+    cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization", "Access-Control-Max-Age": "600"}
+    if request.method == "OPTIONS":
+        return ("", 204, cors)
     c, u, s = request.args.get("c", ""), request.args.get("u", ""), request.args.get("s", "")
     want = _h.new(core.secret().encode(), f"{bid}|{c}|{u}".encode(), "sha256").hexdigest()[:24]
     bot = _bot(bid)
     if not bot or not _h.compare_digest(s, want) or not u.lstrip("-").isdigit():
-        return jsonify(error="bad signature"), 403
+        return jsonify(error="bad signature"), 403, cors
     body = request.get_json(silent=True)
     if body is None:
         body = dict(request.form) or dict(request.args)
-    core.fire_hook(bot, c, int(u), {"json": body, "params": dict(request.args), "method": request.method})
-    return jsonify(ok=True)
+    keep = ("user-agent", "origin", "referer", "x-forwarded-for", "content-type", "accept-language")
+    core.fire_hook(bot, c, int(u), {"json": body, "params": dict(request.args), "query": dict(request.args),
+                                    "method": request.method, "ip": (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip(),
+                                    "headers": {k: v for k, v in request.headers.items() if k.lower() in keep}})
+    return jsonify(ok=True), 200, cors
 
 
 @app.get("/m/<int:bid>")

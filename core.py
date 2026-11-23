@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS scheduled(id TEXT PRIMARY KEY, bot_id INTEGER, user_i
   command TEXT, options TEXT, user_json TEXT);
 CREATE TABLE IF NOT EXISTS bcjobs(id TEXT PRIMARY KEY, bot_id INTEGER, ts REAL, function TEXT, command TEXT, kwargs TEXT,
   callback_url TEXT, status TEXT, total INTEGER, sent INTEGER, failed INTEGER);
+CREATE TABLE IF NOT EXISTS ctl(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, action TEXT);
 CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, ts REAL, level TEXT, text TEXT);
 CREATE INDEX IF NOT EXISTS idx_users_bot ON users(bot_id, last_seen);
 """
@@ -39,7 +40,7 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
     "ALTER TABLE bots ADD COLUMN translate INTEGER DEFAULT 0",
     "ALTER TABLE bots ADD COLUMN version TEXT DEFAULT '1.0.0'",
-    "ALTER TABLE commands ADD COLUMN folder TEXT", "ALTER TABLE pending ADD COLUMN options TEXT",
+    "ALTER TABLE commands ADD COLUMN folder TEXT", "ALTER TABLE pending ADD COLUMN options TEXT", "ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0", "ALTER TABLE bcjobs ADD COLUMN speed REAL",
 ]
 
 DEFAULT_START = '''# Runs when someone sends /start (or just "start")
@@ -202,20 +203,23 @@ def nkc(s):
     return s[1:].strip() if s.startswith("/") else s
 
 
+def nraw(s):
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
 class Index(dict):
-    """exact-case keys first, case-insensitive fallback"""
+    """Lookup order: exactly as typed ('/Bonus' vs 'Bonus'), then without the slash, then ignoring case."""
     def __init__(self, items):
         super().__init__()
-        self.lower = {}
+        self.slashless, self.lower = {}, {}
         for name, cid in items:
-            self[nkc(name)] = cid
+            self[nraw(name)] = cid
+            self.slashless.setdefault(nkc(name), cid)
             self.lower.setdefault(nk(name), cid)
 
     def lookup(self, text):
-        k = nkc(text)
-        return self.get(k) or self.lower.get(k.lower())
-
-    get_ci = lookup
+        t = nraw(text)
+        return self.get(t) or self.slashless.get(nkc(t)) or self.lower.get(nk(t))
 
 
 _index = {}
@@ -394,13 +398,27 @@ def handle_update(bot, upd):
             run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bid, user["id"]))
         cid = idx.lookup("handler_" + utype) or idx.lookup("handler_special_updates")
         ctx = make_ctx(utype, dict(obj), user, chat, "", [], None, None, obj.get("message_id"))
+    is_cb = utype == "callback_query"
+
+    def answer_cb():
+        if is_cb:
+            try:
+                tg(bot["token"], "answerCallbackQuery", callback_query_id=obj["id"])
+            except Exception:
+                pass
+    if one("SELECT 1 FROM users WHERE bot_id=? AND user_id=? AND banned=1", (bid, user["id"])):
+        return answer_cb()
     if utype in ("message", "callback_query") and chat.get("type") == "private":
         touch_user(bid, user)
     if not cid:
-        return
+        return answer_cb()
     cmd = one("SELECT id, name, code FROM commands WHERE id=?", (cid,))
-    if cmd:
-        apply_result(bot, execute(bot, cmd, ctx, gate=True, options=options))
+    if not cmd:
+        return answer_cb()
+    res = execute(bot, cmd, ctx, gate=True, options=options)
+    apply_result(bot, res)
+    if not res.get("answered"):        # worker crashed or timed out before answering the button
+        answer_cb()
 
 
 def fire_hook(bot, command, uid, options=None, user_json=None):
@@ -421,10 +439,21 @@ def fire_hook(bot, command, uid, options=None, user_json=None):
 BG = ThreadPoolExecutor(max_workers=8)
 
 
+def _control():
+    for r in rows("SELECT * FROM ctl ORDER BY id LIMIT 20"):
+        run("DELETE FROM ctl WHERE id=?", (r["id"],))
+        if r["action"] in ("stop", "restart"):
+            stop_bot(r["bot_id"])
+        if r["action"] in ("start", "restart"):
+            time.sleep(0.4) if r["action"] == "restart" else None
+            start_bot(r["bot_id"])
+
+
 def _scheduler():
     while True:
         time.sleep(1)
         try:
+            _control()
             for r in rows("SELECT * FROM scheduled WHERE run_at<=? ORDER BY run_at LIMIT 20", (time.time(),)):
                 bot = one("SELECT * FROM bots WHERE id=?", (r["bot_id"],))
                 if bot and not is_running(bot["id"]):
@@ -449,7 +478,17 @@ def _run_broadcast(job):
     users = [r["user_id"] for r in rows("SELECT user_id FROM users WHERE bot_id=? AND COALESCE(blocked,0)=0", (bot["id"],))]
     run("UPDATE bcjobs SET total=? WHERE id=?", (len(users), job["id"]))
     ok = bad = 0
-    for uid in users:
+    delay, stopped = 0.05, False
+    for n_, uid in enumerate(users):
+        if n_ % 10 == 0:
+            st = one("SELECT status, speed FROM bcjobs WHERE id=?", (job["id"],))
+            while st and st["status"] == "paused":
+                time.sleep(1)
+                st = one("SELECT status, speed FROM bcjobs WHERE id=?", (job["id"],))
+            if not st or st["status"] in ("stopped", "deleted"):
+                stopped = True
+                break
+            delay = 1.0 / max(1.0, st["speed"] or 20.0)
         try:
             if job["function"]:
                 fn = _camel(job["function"])
@@ -465,9 +504,9 @@ def _run_broadcast(job):
                 run("UPDATE users SET blocked=1 WHERE bot_id=? AND user_id=?", (bot["id"], uid))
         if (ok + bad) % 20 == 0:
             run("UPDATE bcjobs SET sent=?, failed=? WHERE id=?", (ok, bad, job["id"]))
-        time.sleep(0.05)
-    run("UPDATE bcjobs SET sent=?, failed=?, status='done' WHERE id=?", (ok, bad, job["id"]))
-    if job.get("callback_url"):
+        time.sleep(delay)
+    run("UPDATE bcjobs SET sent=?, failed=?, status=? WHERE id=?", (ok, bad, "stopped" if stopped else "done", job["id"]))
+    if job.get("callback_url") and not stopped:
         q = parse_qs(urlparse(job["callback_url"]).query)
         if q.get("c") and q.get("u"):
             fire_hook(bot, q["c"][0], int(q["u"][0]), {"json": {

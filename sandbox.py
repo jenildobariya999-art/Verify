@@ -270,7 +270,7 @@ def run_job(p):
     BID = BOT["id"]
     TOKEN = p["token"]
     actions, errors, overlay = [], [], {}
-    state = {"pending": None, "scheduled": [], "depth": 0, "in_error": False}
+    state = {"pending": None, "scheduled": [], "depth": 0, "in_error": False, "answered": False}
     UID = ctx["user"]["id"]
     CHAT = (ctx.get("chat") or {}).get("id", UID)
 
@@ -355,11 +355,23 @@ def run_job(p):
         if params.get("parse_mode"):
             params["parse_mode"] = {"html": "HTML", "markdown": "Markdown", "markdownv2": "MarkdownV2"}.get(
                 str(params["parse_mode"]).lower(), params["parse_mode"])
+        if method == "answerCallbackQuery":
+            state["answered"] = True
         if DRY:
             actions.append({"method": method, "params": params})
             return _wrap(fake(method, params))
+        files = {}
+        for k, v in list(params.items()):
+            if hasattr(v, "read") or isinstance(v, (bytes, bytearray)):
+                files[k] = (getattr(v, "name", None) or "file", v)
+            elif isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], (bytes, bytearray)) or hasattr(v, "read"):
+                files[k] = v
         try:
-            data = SESSION.post(f"{TG_BASE}/bot{TOKEN}/{method}", json=params, timeout=25).json()
+            if files:      # file upload: multipart, other values JSON-encoded
+                form = {k: (v if isinstance(v, (str, int, float)) else json.dumps(v)) for k, v in params.items() if k not in files}
+                data = SESSION.post(f"{TG_BASE}/bot{TOKEN}/{method}", data=form, files=files, timeout=90).json()
+            else:
+                data = SESSION.post(f"{TG_BASE}/bot{TOKEN}/{method}", json=params, timeout=25).json()
         except Exception as e:
             raise TelegramError(f"Telegram request failed: {e}")
         if not data.get("ok"):
@@ -393,6 +405,50 @@ def run_job(p):
            "getChatAdministrators": ["chat_id"]}
     ALIAS = {"replyText": "sendMessage", "replyPhoto": "sendPhoto", "getChatMembersCount": "getChatMemberCount",
              "kickChatMember": "banChatMember"}
+    SIG = {k: v.split() for k, v in {
+        "sendMessage": "text parse_mode entities disable_web_page_preview disable_notification protect_content reply_to_message_id allow_sending_without_reply reply_markup timeout message_thread_id reply_parameters link_preview_options",
+        "replyText": "chat_id text parse_mode entities disable_web_page_preview disable_notification protect_content reply_to_message_id allow_sending_without_reply reply_markup timeout message_thread_id reply_parameters link_preview_options",
+        "replyPhoto": "chat_id photo caption parse_mode caption_entities disable_notification protect_content reply_to_message_id allow_sending_without_reply reply_markup",
+        "sendPhoto": "photo caption parse_mode caption_entities disable_web_page_preview disable_notification protect_content reply_to_message_id allow_sending_without_reply reply_markup timeout message_thread_id has_spoiler",
+        "sendVideo": "video duration width height thumbnail caption parse_mode caption_entities supports_streaming disable_notification protect_content reply_to_message_id allow_sending_without_reply reply_markup",
+        "sendAudio": "audio caption duration performer title reply_to_message_id reply_markup parse_mode",
+        "sendVoice": "voice caption duration reply_to_message_id reply_markup parse_mode",
+        "sendDocument": "document reply_to_message_id caption reply_markup parse_mode",
+        "sendSticker": "sticker reply_to_message_id reply_markup",
+        "sendAnimation": "animation duration width height thumbnail caption parse_mode caption_entities",
+        "sendVideoNote": "video_note duration length reply_to_message_id reply_markup",
+        "sendMediaGroup": "media", "sendDice": "emoji", "sendChatAction": "action",
+        "sendLocation": "latitude longitude live_period reply_to_message_id reply_markup",
+        "sendVenue": "latitude longitude title address", "sendContact": "phone_number first_name last_name vcard",
+        "sendPoll": "question options is_anonymous type allows_multiple_answers correct_option_id explanation explanation_parse_mode open_period close_date is_closed",
+        "editMessageText": "text chat_id message_id inline_message_id parse_mode entities disable_web_page_preview reply_markup link_preview_options",
+        "editMessageCaption": "caption chat_id message_id inline_message_id parse_mode caption_entities reply_markup",
+        "editMessageReplyMarkup": "chat_id message_id inline_message_id reply_markup",
+        "editMessageMedia": "media chat_id message_id inline_message_id reply_markup",
+        "deleteMessage": "chat_id message_id", "deleteMessages": "chat_id message_ids",
+        "forwardMessage": "chat_id from_chat_id message_id disable_notification protect_content",
+        "copyMessage": "chat_id from_chat_id message_id caption parse_mode caption_entities disable_notification protect_content reply_to_message_id allow_sending_without_reply reply_markup",
+        "forwardMessages": "chat_id from_chat_id message_ids", "copyMessages": "chat_id from_chat_id message_ids",
+        "getChat": "chat_id", "getChatMember": "chat_id user_id", "getChatMemberCount": "chat_id",
+        "getChatAdministrators": "chat_id return_bots", "leaveChat": "chat_id", "getFile": "file_id",
+        "getFileUrl": "file_id", "getUserProfilePhotos": "user_id offset limit",
+        "banChatMember": "chat_id user_id until_date revoke_messages", "unbanChatMember": "chat_id user_id only_if_banned",
+        "restrictChatMember": "chat_id user_id until_date", "promoteChatMember": "chat_id user_id",
+        "approveChatJoinRequest": "chat_id user_id", "declineChatJoinRequest": "chat_id user_id",
+        "pinChatMessage": "chat_id message_id disable_notification", "unpinChatMessage": "chat_id message_id",
+        "unpinAllChatMessages": "chat_id", "createChatInviteLink": "chat_id name expire_date member_limit creates_join_request",
+        "revokeChatInviteLink": "chat_id invite_link", "exportChatInviteLink": "chat_id",
+        "setMessageReaction": "chat_id message_id reaction is_big", "setChatTitle": "chat_id title",
+        "setChatDescription": "chat_id description", "stopPoll": "chat_id message_id reply_markup",
+        "answerCallbackQuery": "callback_query_id text show_alert url cache_time",
+        "answerInlineQuery": "inline_query_id results cache_time is_personal next_offset",
+        "answerPreCheckoutQuery": "pre_checkout_query_id ok error_message",
+        "answerShippingQuery": "shipping_query_id ok shipping_options error_message",
+        "answerWebAppQuery": "web_app_query_id result", "setMyCommands": "commands scope language_code",
+        "sendInvoice": "title description invoice_payload provider_token currency prices",
+        "createInvoiceLink": "title description payload provider_token currency prices",
+        "getChatMenuButton": "chat_id", "setChatMenuButton": "chat_id menu_button",
+    }.items()}
     HTML_DEFAULT = {"sendMessage", "editMessageText", "editMessageCaption", "sendPhoto", "sendVideo", "sendAnimation",
                     "sendDocument", "sendAudio", "sendVoice", "copyMessage"}
     DEFAULT_CHAT = {"sendChatAction", "sendDice", "editMessageText", "editMessageCaption", "editMessageReplyMarkup",
@@ -430,12 +486,18 @@ def run_job(p):
 
         def _invoke(self, method, args, kw):
             orig, method = method, ALIAS.get(method, method)
-            names = list(POS.get(method, []))
-            if orig in ("replyText", "replyPhoto"):
-                names = ["chat_id"] + names
-                if len(args) == 1:
-                    names = names[1:]
-            elif method.startswith("send") and len(args) == 2 and names:
+            if orig == "replyTo":
+                m_, t_ = args[0], (args[1] if len(args) > 1 else kw.pop("text"))
+                return self._invoke("sendMessage", (t_,), {**kw, "chat_id": m_.chat.id, "reply_to_message_id": m_.message_id})
+            if orig == "getMe":
+                return D({"id": BID, "is_bot": True, "first_name": BOT.get("name"), "username": BOT.get("username"),
+                          "can_join_groups": True})
+            if orig == "downloadFile":
+                return requests.get(f"{TG_BASE}/file/bot{TOKEN}/{args[0] if args else kw['file_path']}", timeout=60).content
+            names = list(SIG.get(orig) or SIG.get(method) or POS.get(method, []))
+            if orig in ("replyText", "replyPhoto") and len(args) == 1:
+                names = names[1:]
+            elif method.startswith("send") and orig not in SIG and len(args) == 2 and names:
                 names = ["chat_id"] + names
             for n, v in zip(names, args):
                 kw[n] = v
@@ -449,6 +511,8 @@ def run_job(p):
                 kw.setdefault("callback_query_id", ctx.get("callback_query_id"))
             if "text" in kw and kw["text"] is not None:
                 kw["text"] = str(kw["text"])
+            if kw.get("parse_mode") == "":          # TBC: parse_mode="" means plain text
+                kw["parse_mode"] = None
             # Like Telebot Creator: HTML is the default. Pass parse_mode=None for plain text.
             if method in HTML_DEFAULT and ("text" in kw or "caption" in kw) and "parse_mode" not in kw \
                     and "entities" not in kw and "caption_entities" not in kw:
@@ -518,13 +582,13 @@ def run_job(p):
 
     def find_cmd(name):
         rows_ = db().execute("SELECT name, code FROM commands WHERE bot_id=?", (BID,)).fetchall()
-        exact = nkc(name)
-        for r in rows_:
-            if nkc(r["name"]) == exact:
-                return r["name"], r["code"]
-        for r in rows_:
-            if nk(r["name"]) == nk(name):
-                return r["name"], r["code"]
+        raw = re.sub(r"\s+", " ", (name or "").strip())
+        for test in (lambda r: re.sub(r"\s+", " ", r["name"].strip()) == raw,      # exactly as typed
+                     lambda r: nkc(r["name"]) == nkc(name),                      # without the slash
+                     lambda r: nk(r["name"]) == nk(name)):                       # ignoring case
+            for r in rows_:
+                if test(r):
+                    return r["name"], r["code"]
         return None
 
     def split_command(text):
@@ -539,7 +603,7 @@ def run_job(p):
     def runCommand(command, options=None):
         if state["in_error"]:
             raise RuntimeError("runCommand is disabled inside the ! error handler")
-        if state["depth"] >= 8:
+        if state["depth"] >= 20:
             raise RuntimeError("runCommand is nested too deeply")
         hit = split_command(command)
         if not hit:
@@ -593,7 +657,92 @@ def run_job(p):
 
     _rc, _rca, _cst, _bc = runCommand, runCommandAfter, cancelScheduledTask, broadcast
 
-    class BotHigh:
+    def _file(name, data):
+        f = io.BytesIO(data if isinstance(data, bytes) else str(data).encode("utf-8"))
+        f.name = name
+        return f
+
+    def _users(extra=""):
+        return [dict(r) for r in db().execute(
+            f"SELECT user_id,first_name,username,first_seen,last_seen,blocked,COALESCE(banned,0) banned FROM users WHERE bot_id=?{extra}", (BID,))]
+
+    def _ctl(action, bot_id=None):
+        if not DRY:
+            db().execute("INSERT INTO ctl(bot_id, action) VALUES(?,?)", (bot_id or BID, action))
+        return {"ok": True}
+
+    def _bcs(jid):
+        r = db().execute("SELECT * FROM bcjobs WHERE id=? AND bot_id=?", (jid, BID)).fetchone()
+        if not r:
+            return None
+        st = {"done": "completed"}.get(r["status"], r["status"])
+        tot = r["total"] or 0
+        done = (r["sent"] or 0) + (r["failed"] or 0)
+        return D({"broadcast_id": r["id"], "id": r["id"], "status": st, "total": tot, "total_users": tot,
+                  "total_success": r["sent"] or 0, "total_errors": r["failed"] or 0, "sent": r["sent"] or 0,
+                  "failed": r["failed"] or 0, "speed": r["speed"] or 20,
+                  "progress": 100.0 if st == "completed" else (round(done * 100.0 / tot, 1) if tot else 0.0)})
+
+    def _bc_set(jid, **cols):
+        if not DRY:
+            sets = ",".join(f"{k}=?" for k in cols)
+            db().execute(f"UPDATE bcjobs SET {sets} WHERE id=? AND bot_id=?", (*cols.values(), jid, BID))
+        return {"ok": True}
+
+    class _BotMeta(type):
+        def __getattr__(cls, name):          # Bot.replyText(...), Bot.getMe() ... fall through to the bot API
+            if name.startswith("_"):
+                raise AttributeError(name)
+            return getattr(bot, name)
+
+    class BotHigh(metaclass=_BotMeta):
+        setData = staticmethod(lambda name, data, **k: (botstore.save(name, data), {"ok": True})[1])
+        log = staticmethod(lambda *t: db().execute("INSERT INTO logs(bot_id,ts,level,text) VALUES(?,?,?,?)",
+                                                   (BID, time.time(), "print", " ".join(map(str, t))[:3000])) and None)
+        getAllData = staticmethod(lambda output_format="json": _file("bot_data." + output_format, json.dumps(botstore.all(), indent=2, default=str, ensure_ascii=False)))
+        getDataFile = staticmethod(lambda name, output_format="txt": _file(f"{name}.{output_format}", (lambda v: v if isinstance(v, str) else json.dumps(v, default=str, ensure_ascii=False))(botstore.get(name))))
+        stop = staticmethod(lambda bot_id=None, api_key=None: (cross_bot(bot_id, api_key), _ctl("stop"))[1])
+        start = staticmethod(lambda bot_id=None, api_key=None: (cross_bot(bot_id, api_key), _ctl("start"))[1])
+        status = staticmethod(lambda bot_id=None, api_key=None: "working" if (db().execute("SELECT running FROM bots WHERE id=?", (BID,)).fetchone() or {"running": 0})["running"] else "stopped")
+        setAutoTranslate = staticmethod(lambda enabled=True: (db().execute("UPDATE bots SET translate=? WHERE id=?", (1 if enabled else 0, BID)), {"ok": True})[1])
+        getAutoTranslate = staticmethod(lambda: bool((db().execute("SELECT translate FROM bots WHERE id=?", (BID,)).fetchone() or {"translate": 0})["translate"]))
+        getBroadcastStatus = getBroadcastProgress = staticmethod(_bcs)
+        stopBroadcast = staticmethod(lambda jid: _bc_set(jid, status="stopped"))
+        pauseBroadcast = staticmethod(lambda jid: _bc_set(jid, status="paused"))
+        resumeBroadcast = staticmethod(lambda jid, speed=None: _bc_set(jid, status="running", **({"speed": speed} if speed else {})))
+        setBroadcastSpeed = staticmethod(lambda jid, speed: _bc_set(jid, speed=float(speed)))
+        rerunBroadcast = staticmethod(lambda jid, speed=None: _bc_set(jid, status="queued", sent=0, failed=0, **({"speed": speed} if speed else {})))
+        clearBroadcast = staticmethod(lambda jid=None: (db().execute("DELETE FROM bcjobs WHERE bot_id=?" + (" AND id=?" if jid else ""), (BID, jid) if jid else (BID,)), {"ok": True})[1])
+        listBroadcasts = staticmethod(lambda status=None, limit=20: [_bcs(r["id"]) for r in db().execute("SELECT id FROM bcjobs WHERE bot_id=? ORDER BY ts DESC LIMIT ?", (BID, int(limit))).fetchall() if status is None or _bcs(r["id"]).status == status])
+        blockUser = staticmethod(lambda user_id: (db().execute("UPDATE users SET banned=1 WHERE bot_id=? AND user_id=?", (BID, user_id)), {"ok": True})[1])
+        unblockUser = staticmethod(lambda user_id: (db().execute("UPDATE users SET banned=0 WHERE bot_id=? AND user_id=?", (BID, user_id)), {"ok": True})[1])
+        getBlockedUsers = staticmethod(lambda: [r["user_id"] for r in _users(" AND banned=1")])
+        getBlockedUsersCount = staticmethod(lambda: len(_users(" AND banned=1")))
+        getBlockedUsersFile = staticmethod(lambda: _file("blocked_users.json", json.dumps([r["user_id"] for r in _users(" AND banned=1")])))
+
+        @staticmethod
+        def getBotUsersFile(output_format="json", include_creation_date=False, include_last_active_date=False):
+            cols = ["user_id", "first_name", "username"] + (["first_seen"] if include_creation_date else []) + (["last_seen"] if include_last_active_date else [])
+            data = [{c: r[c] for c in cols} for r in _users()]
+            if output_format == "csv":
+                import csv
+                b = io.StringIO()
+                w = csv.DictWriter(b, fieldnames=cols)
+                w.writeheader()
+                w.writerows(data)
+                return _file("users.csv", b.getvalue())
+            return _file("users." + ("txt" if output_format == "txt" else "json"),
+                         "\n".join(str(r["user_id"]) for r in data) if output_format == "txt" else json.dumps(data, indent=2))
+
+        @staticmethod
+        def getStats(time_frames=None, bot_id=None, api_key=None):
+            now = time.time()
+            n = lambda w, *a: db().execute(f"SELECT COUNT(*) c FROM users WHERE bot_id=? AND {w}", (BID, *a)).fetchone()["c"]
+            frames = time_frames or [1, 7, 30]
+            return D({"total_users": n("1=1"), "blocked": n("COALESCE(blocked,0)=1"),
+                      "active": {str(d): n("last_seen>=?", now - d * 86400) for d in frames},
+                      "new": {str(d): n("first_seen>=?", now - d * 86400) for d in frames}})
+
         getData = staticmethod(lambda name, bot_id=None, api_key=None: (cross_bot(bot_id, api_key), botstore.get(name))[1])
         saveData = staticmethod(lambda name, data, bot_id=None, api_key=None: (cross_bot(bot_id, api_key), botstore.save(name, data), {"ok": True})[2])
         deleteData = staticmethod(lambda name, bot_id=None: (botstore.delete(name), {"ok": True})[1])
@@ -652,6 +801,19 @@ def run_job(p):
                     userstore.delete(k)
 
         @staticmethod
+        def getDataFile(name, user=None, output_format="txt"):
+            v = UserHigh._s(user).get(name)
+            return _file(f"{name}.{output_format}", v if isinstance(v, str) else json.dumps(v, default=str, ensure_ascii=False))
+
+        @staticmethod
+        def getAllData(name=None, output_format="json", old_data=False):
+            out = {}
+            for r in db().execute("SELECT scope,k,v FROM kv WHERE bot_id=? AND scope LIKE 'user:%'", (BID,)):
+                if name is None or r["k"] == name:
+                    out.setdefault(r["scope"][5:], {})[r["k"]] = json.loads(r["v"])
+            return _file("user_data." + output_format, json.dumps(out, indent=2, default=str, ensure_ascii=False))
+
+        @staticmethod
         def getAllDataOfUser(user, output_format="json"):
             return io.BytesIO(json.dumps(Store(f"user:{user}").all(), indent=2, default=str).encode())
 
@@ -694,6 +856,18 @@ def run_job(p):
         claim = staticmethod(lambda *a, **k: True)
 
     class Account:
+        """Telebot Creator account functions. Account data and starting/stopping panel bots work;
+        the rest only exist on the Telebot Creator platform."""
+        saveData = staticmethod(lambda name, data: (db().execute("INSERT OR REPLACE INTO kv(bot_id,scope,k,v) VALUES(0,'account',?,?)", (name, json.dumps(data, default=str))), {"ok": True})[1])
+        getData = staticmethod(lambda name: (lambda r: json.loads(r["v"]) if r else None)(db().execute("SELECT v FROM kv WHERE bot_id=0 AND scope='account' AND k=?", (name,)).fetchone()))
+        deleteData = staticmethod(lambda name: (db().execute("DELETE FROM kv WHERE bot_id=0 AND scope='account' AND k=?", (name,)), {"ok": True})[1])
+        start_bot = staticmethod(lambda botid: _ctl("start", int(botid)))
+        stop_bot = staticmethod(lambda botid: _ctl("stop", int(botid)))
+        restart_bot = staticmethod(lambda botid: _ctl("restart", int(botid)))
+        get_bot_status = staticmethod(lambda botid: "working" if (db().execute("SELECT running FROM bots WHERE id=?", (int(botid),)).fetchone() or {"running": 0})["running"] else "stopped")
+        get_bots_list = staticmethod(lambda: [D({"botid": r["id"], "name": r["name"], "username": r["username"], "status": "working" if r["running"] else "stopped"}) for r in db().execute("SELECT id,name,username,running FROM bots")])
+        gen_random_id = staticmethod(lambda: uuid.uuid4().hex[:16])
+
         def __getattr__(self, name):
             def na(*a, **k):
                 raise NotImplementedError(f"Account.{name}() is a Telebot Creator platform function and isn't available here.")
@@ -806,8 +980,14 @@ def run_job(p):
                     pass
                 except BaseException as e2:
                     note("!", e2, getattr(e2, "_cmd_info", (0, None))[1])
+    if ctx.get("update_type") == "callback_query" and ctx.get("callback_query_id") and not state["answered"] and not DRY:
+        try:                      # like Telebot Creator: a button press is always answered, so it stops "loading"
+            tgcall("answerCallbackQuery", callback_query_id=ctx["callback_query_id"])
+        except Exception:
+            pass
+        state["answered"] = True
     first = errors[0] if errors else None
-    return {"actions": actions, "pending": state["pending"], "scheduled": state["scheduled"],
+    return {"answered": state["answered"], "actions": actions, "pending": state["pending"], "scheduled": state["scheduled"],
             "stdout": buf.getvalue()[-4000:], "errors": errors,
             "error": first["message"] if first else None, "error_line": first["line"] if first else None}
 
