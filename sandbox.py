@@ -393,6 +393,9 @@ def run_job(p):
         if params.get("parse_mode"):
             params["parse_mode"] = {"html": "HTML", "markdown": "Markdown", "markdownv2": "MarkdownV2"}.get(
                 str(params["parse_mode"]).lower(), params["parse_mode"])
+        if params.get("parse_mode") not in (None, "HTML", "Markdown", "MarkdownV2"):
+            raise TelegramError("Telegram API error: 400. Description: Bad Request: unsupported parse_mode "
+                                f"({str(params['parse_mode'])[:40]!r})")
         if params.get("parse_mode") == "HTML":
             for k in ("text", "caption"):
                 if isinstance(params.get(k), str):
@@ -511,6 +514,14 @@ def run_job(p):
             return {"keyboard": [[{"text": str(k)} for k in row] for row in keyboard], "resize_keyboard": True}
         return {"remove_keyboard": True} if remove_keyboard else None
 
+    def _chat_like(v, nargs):
+        """Is this positional argument a chat (123456, -100123, "@channel") rather than the message content?"""
+        if isinstance(v, bool):
+            return False
+        if isinstance(v, int):
+            return True
+        return isinstance(v, str) and nargs >= 2 and bool(re.fullmatch(r"-?\d{5,}|@\w{3,}", v.strip()))
+
     class BotAPI:
         """Low-level Telegram wrapper (bot.*) plus the panel's friendly helpers."""
         username, name = BOT.get("username"), BOT.get("name")
@@ -539,9 +550,12 @@ def run_job(p):
             names = list(SIG.get(orig) or SIG.get(method) or POS.get(method, []))
             if orig in ("replyText", "replyPhoto") and len(args) == 1 and names[1] not in kw:
                 names = names[1:]          # bot.replyText("hello"): just the text, sent to the current chat
-            elif method.startswith("send") and orig not in SIG and len(args) == 2 and names:
-                names = ["chat_id"] + names
+            elif (method.startswith("send") and names and names[0] != "chat_id" and "chat_id" not in kw
+                  and args and _chat_like(args[0], len(args))):
+                names = ["chat_id"] + names    # bot.sendMessage(u, "text"): chat first, like telebot's send_message
             for n, v in zip(names, args):
+                if n in kw:
+                    raise TypeError(f"{orig}() got multiple values for argument '{n}'")
                 kw[n] = v
             if method == "getFileUrl":
                 return f"{TG_BASE}/file/bot{TOKEN}/{tgcall('getFile', file_id=kw.get('file_id'))['file_path']}"
