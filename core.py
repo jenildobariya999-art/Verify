@@ -129,6 +129,13 @@ def _is_blocked(err):
     return "blocked" in e or "deactivated" in e or "chat not found" in e
 
 
+def _fix(text, parse_mode):
+    if parse_mode == "HTML":
+        from sandbox import fix_html
+        return fix_html(text)
+    return text
+
+
 def send_broadcast(bot, text, parse_mode="HTML"):
     uids = [r["user_id"] for r in rows("SELECT user_id FROM users WHERE bot_id=? AND COALESCE(blocked,0)=0", (bot["id"],))]
     bc = run("INSERT INTO broadcasts(bot_id,ts,text,total,sent,failed,status) VALUES(?,?,?,?,0,0,'sending')",
@@ -138,7 +145,7 @@ def send_broadcast(bot, text, parse_mode="HTML"):
         s = f = 0
         for uid in uids:
             try:
-                tg(bot["token"], "sendMessage", chat_id=uid, text=text, parse_mode=parse_mode)
+                tg(bot["token"], "sendMessage", chat_id=uid, text=_fix(text, parse_mode), parse_mode=parse_mode)
                 s += 1
             except Exception as e:
                 f += 1
@@ -492,6 +499,9 @@ def _run_broadcast(job):
         try:
             if job["function"]:
                 fn = _camel(job["function"])
+                from sandbox import fix_html
+                kw = {k: (fix_html(v) if k in ("text", "caption") and isinstance(v, str) and kw.get("parse_mode", "HTML") == "HTML" else v)
+                      for k, v in kw.items()}
                 extra = {"parse_mode": "HTML"} if fn in ("sendMessage", "sendPhoto", "sendVideo", "sendAnimation",
                          "sendDocument", "sendAudio", "sendVoice") and "parse_mode" not in kw and "entities" not in kw else {}
                 tg(bot["token"], fn, **{**extra, **kw, "chat_id": uid})

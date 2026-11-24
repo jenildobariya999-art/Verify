@@ -469,7 +469,7 @@ bot.send("Pick one", inline=[[("Yes", "yes"), ("Open site", "https://example.com
 `# command: /hi
 sent = bot.sendMessage("<b>Hello</b> " + (user.first_name or ""))
 bot.replyText(u, "Message " + str(sent.message_id) + " sent")`,"html parse_mode text bold emoji tg-emoji"],
-["Messages","HTML formatting","<b> <i> <u> <s> <code> <pre> <a href> <tg-spoiler> <tg-emoji emoji-id>","HTML is the default. Escape user text that may contain &lt; &gt; &amp; with [[import html; html.escape(text)]]. To keep a user's own formatting use [[apply_html_entities(text, entities, {})]].",
+["Messages","HTML formatting","<b> <i> <u> <s> <code> <pre> <a href> <tg-spoiler> <tg-emoji emoji-id>","HTML is the default, and sloppy HTML is repaired for you before sending: a tag left open (an unclosed [[&lt;b&gt;]]) is closed, a stray closing tag is dropped, [[&lt;br&gt;]] becomes a new line, and a lone &lt; or &amp; is escaped, so Telegram does not answer “can't parse entities”. Escape user text that may contain &lt; &gt; &amp; with [[import html; html.escape(text)]]. To keep a user's own formatting use [[apply_html_entities(text, entities, {})]].",
 `# command: /echo
 bot.sendMessage(apply_html_entities(message.text, message.entities, {}))`,"format bold italic markdown entities"],
 ["Messages","bot.sendPhoto / sendVideo / sendDocument / sendAudio …","bot.sendPhoto(photo, caption=…)   bot.sendDocument(document=…)","Media from a file_id, a URL or a file object. Positional arguments follow the Telegram order. Captions are HTML by default.","","media image video file upload photo"],

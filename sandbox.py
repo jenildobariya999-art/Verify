@@ -193,6 +193,44 @@ def apply_html_entities(text, entities, custom_subs=None):
     return "".join(out)
 
 
+_TG_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "a", "code", "pre", "tg-spoiler",
+            "tg-emoji", "blockquote", "span"}
+_TAG_RE = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9-]*)((?:\s+[^<>]*?)?)\s*(/?)>")
+
+
+def _esc_text(t):
+    t = re.sub(r"&(?!(?:#\d+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);)", "&amp;", t)
+    return t.replace("<", "&lt;").replace(">", "&gt;")
+
+
+def fix_html(text):
+    """Make HTML safe for Telegram: close tags that were left open, drop stray closing tags, turn <br> into a
+    new line, and escape a bare < > & or an unsupported tag so it shows as text instead of causing a 400 error."""
+    s, out, stack, pos = str(text), [], [], 0
+    for m in _TAG_RE.finditer(s):
+        out.append(_esc_text(s[pos:m.start()]))
+        pos = m.end()
+        closing, name, attrs, selfclose = m.group(1) == "/", m.group(2).lower(), m.group(3), m.group(4)
+        if name == "br":
+            out.append("\n")
+        elif name not in _TG_TAGS or (name == "span" and "tg-spoiler" not in attrs):
+            out.append(_esc_text(m.group(0)))
+        elif closing:
+            if name in stack:
+                while stack:
+                    top = stack.pop()
+                    out.append(f"</{top}>")
+                    if top == name:
+                        break
+        elif not selfclose:
+            stack.append(name)
+            out.append(f"<{name}{attrs}>")
+    out.append(_esc_text(s[pos:]))
+    while stack:
+        out.append(f"</{stack.pop()}>")
+    return "".join(out)
+
+
 # ---------------- helpers available to commands ----------------
 def isNumeric(x):
     try:
@@ -355,6 +393,10 @@ def run_job(p):
         if params.get("parse_mode"):
             params["parse_mode"] = {"html": "HTML", "markdown": "Markdown", "markdownv2": "MarkdownV2"}.get(
                 str(params["parse_mode"]).lower(), params["parse_mode"])
+        if params.get("parse_mode") == "HTML":
+            for k in ("text", "caption"):
+                if isinstance(params.get(k), str):
+                    params[k] = fix_html(params[k])
         if method == "answerCallbackQuery":
             state["answered"] = True
         if DRY:
@@ -495,8 +537,8 @@ def run_job(p):
             if orig == "downloadFile":
                 return requests.get(f"{TG_BASE}/file/bot{TOKEN}/{args[0] if args else kw['file_path']}", timeout=60).content
             names = list(SIG.get(orig) or SIG.get(method) or POS.get(method, []))
-            if orig in ("replyText", "replyPhoto") and len(args) == 1:
-                names = names[1:]
+            if orig in ("replyText", "replyPhoto") and len(args) == 1 and names[1] not in kw:
+                names = names[1:]          # bot.replyText("hello"): just the text, sent to the current chat
             elif method.startswith("send") and orig not in SIG and len(args) == 2 and names:
                 names = ["chat_id"] + names
             for n, v in zip(names, args):
