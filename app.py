@@ -1,5 +1,6 @@
-import os, secrets, hmac, re, json, time, threading
+import os, secrets, hmac, re, json, time, threading, base64
 import yaml
+import requests
 import jinja2
 from functools import wraps
 from flask import Flask, request, jsonify, session, render_template, redirect, send_from_directory
@@ -110,12 +111,10 @@ def add_bot():
 @app.delete("/api/bots/<int:bid>")
 @auth
 def del_bot(bid):
-    core.stop_bot(bid)
-    core.invalidate(bid)
-    for t in ("commands", "kv", "pending", "users", "logs", "errors", "env", "folders", "miniapps", "broadcasts"):
-        core.run(f"DELETE FROM {t} WHERE bot_id=?", (bid,))
-    core.run("DELETE FROM bots WHERE id=?", (bid,))
-    return jsonify(ok=True)
+    """Moves the bot (commands, data, users, token) to the recycle bin; it can be restored for TRASH_DAYS days."""
+    if not core.trash_bot(bid):
+        return jsonify(error="No such bot."), 404
+    return jsonify(ok=True, days=core.TRASH_DAYS)
 
 
 @app.post("/api/bots/<int:bid>/<action>")
@@ -145,8 +144,8 @@ def add_command(bid):
         return jsonify(error="Give the command a name."), 400
     if _exists(bid, name):
         return jsonify(error=f"{name} already exists."), 400
-    cid = core.run("INSERT INTO commands(bot_id, name, code, folder) VALUES(?,?,?,?)",
-                   (bid, name, request.json.get("code") or "bot.send(\"Hello!\")\n", request.json.get("folder")))
+    cid = core.run("INSERT INTO commands(bot_id, name, code, folder, updated_at) VALUES(?,?,?,?,?)",
+                   (bid, name, request.json.get("code") or "bot.send(\"Hello!\")\n", request.json.get("folder"), time.time()))
     core.invalidate(bid)
     return jsonify(core.one("SELECT * FROM commands WHERE id=?", (cid,)))
 
@@ -158,8 +157,8 @@ def save_command(cid):
     name = norm_name(request.json.get("name")) or cmd["name"]
     if _exists(cmd["bot_id"], name, cid):
         return jsonify(error=f"{name} already exists."), 400
-    core.run("UPDATE commands SET name=?, code=? WHERE id=?",
-             (name, request.json.get("code", cmd["code"]), cid))
+    core.run("UPDATE commands SET name=?, code=?, updated_at=? WHERE id=?",
+             (name, request.json.get("code", cmd["code"]), time.time(), cid))
     core.invalidate(cmd["bot_id"])
     return jsonify(core.one("SELECT * FROM commands WHERE id=?", (cid,)))
 
@@ -168,9 +167,25 @@ def save_command(cid):
 @auth
 def del_command(cid):
     c = core.one("SELECT bot_id FROM commands WHERE id=?", (cid,))
-    core.run("DELETE FROM commands WHERE id=?", (cid,))
-    c and core.invalidate(c["bot_id"])
+    if c:
+        core.trash_commands(c["bot_id"], [cid])
     return jsonify(ok=True)
+
+
+@app.post("/api/commands/<int:cid>/duplicate")
+@auth
+def duplicate_command(cid):
+    c = core.one("SELECT * FROM commands WHERE id=?", (cid,))
+    if not c:
+        return jsonify(error="No such command."), 404
+    name, i = f"{c['name']} copy", 1
+    while _exists(c["bot_id"], name):
+        i += 1
+        name = f"{c['name']} copy {i}"
+    nid = core.run("INSERT INTO commands(bot_id, name, code, folder, updated_at) VALUES(?,?,?,?,?)",
+                   (c["bot_id"], name, c["code"], c["folder"], time.time()))
+    core.invalidate(c["bot_id"])
+    return jsonify(core.one("SELECT * FROM commands WHERE id=?", (nid,)))
 
 
 @app.post("/api/commands/<int:cid>/test")
@@ -410,8 +425,8 @@ def import_cmds(bid):
         cmds = data["commands"]
     except Exception as e:
         return jsonify(error=f"Couldn't read that file as {fmt.upper()}: {e}"), 400
-    if j.get("replace"):
-        core.run("DELETE FROM commands WHERE bot_id=?", (bid,))
+    if j.get("replace"):          # the old commands go to the recycle bin, not into thin air
+        core.trash_commands(bid, [r["id"] for r in core.rows("SELECT id FROM commands WHERE bot_id=?", (bid,))])
     added = updated = 0
     for c in cmds:
         name = norm_name(c.get("name"))
@@ -420,10 +435,10 @@ def import_cmds(bid):
         hit = next((r for r in core.rows("SELECT id, name FROM commands WHERE bot_id=?", (bid,))
                     if core.nraw(r["name"]) == core.nraw(name)), None)
         if hit:
-            core.run("UPDATE commands SET code=? WHERE id=?", (c.get("code", ""), hit["id"]))
+            core.run("UPDATE commands SET code=?, updated_at=? WHERE id=?", (c.get("code", ""), time.time(), hit["id"]))
             updated += 1
         else:
-            core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)", (bid, name, c.get("code", "")))
+            core.run("INSERT INTO commands(bot_id, name, code, updated_at) VALUES(?,?,?,?)", (bid, name, c.get("code", ""), time.time()))
             added += 1
     if data.get("bot_data"):
         core.kv_apply(bid, "bot", data["bot_data"])
@@ -536,7 +551,7 @@ def bulk(bid):
     ids = [int(i) for i in j.get("ids", [])]
     ph = ",".join("?" * len(ids)) or "NULL"
     if j.get("action") == "delete":
-        core.run(f"DELETE FROM commands WHERE bot_id=? AND id IN ({ph})", (bid, *ids))
+        core.trash_commands(bid, ids)
     elif j.get("action") == "move":
         core.run(f"UPDATE commands SET folder=? WHERE bot_id=? AND id IN ({ph})", (j.get("folder") or None, bid, *ids))
     core.invalidate(bid)
@@ -610,138 +625,232 @@ def export_users(bid):
 
 
 # ---------- backups (More menu) ----------
-def _bot_snapshot(b, with_data=True, with_token=True):
-    bid = b["id"]
-    snap = {"name": b["name"], "username": b["username"], "version": b.get("version") or "1.0.0",
-            "was_running": bool(b["running"]),
-            "commands": [{"name": c["name"], "code": c["code"], "folder": c["folder"]} for c in
-                         core.rows("SELECT name, code, folder FROM commands WHERE bot_id=? ORDER BY name", (bid,))],
-            "folders": [r["name"] for r in core.rows("SELECT name FROM folders WHERE bot_id=?", (bid,))],
-            "env": core.rows("SELECT k, v, raw FROM env WHERE bot_id=?", (bid,)),
-            "miniapp": (core.one("SELECT html FROM miniapps WHERE bot_id=?", (bid,)) or {}).get("html")}
-    if with_token:
-        snap["token"] = b["token"]
-    if with_data:
-        snap["bot_data"] = core.kv_all(bid, "bot")
-        snap["user_data"] = {}
-        for r in core.rows("SELECT DISTINCT scope FROM kv WHERE bot_id=? AND scope LIKE 'user:%'", (bid,)):
-            snap["user_data"][r["scope"][5:]] = core.kv_all(bid, r["scope"])
-        snap["users"] = core.rows("SELECT user_id, first_name, username, first_seen, last_seen, blocked "
-                                  "FROM users WHERE bot_id=?", (bid,))
-    return snap
-
-
 def _download(body, name, mime="application/octet-stream"):
-    return app.response_class(body, mimetype=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return app.response_class(body, mimetype=mime, headers={"Content-Disposition": f'attachment; filename="{name}"',
+                                                            "Cache-Control": "no-store"})
+
+
+BACKUP_KINDS = ("all.json", "commands.json", "users.json", "users.csv", "commands.zip", "panel.db")
+
+
+def _backup_response(kind):
+    stamp = time.strftime("%Y%m%d_%H%M")
+    if kind in ("all.json", "commands.json"):
+        with_data = kind == "all.json"
+        body = json.dumps(core.backup_doc(with_data, True), indent=1, ensure_ascii=False, default=str)
+        return _download(body, f"botbench_backup_{stamp}{'' if with_data else '_commands_only'}.json", "application/json")
+    if kind in ("users.json", "users.csv"):
+        data = core.rows("SELECT b.username bot, u.user_id, u.first_name, u.username, u.first_seen, u.last_seen, "
+                         "COALESCE(u.blocked,0) blocked FROM users u JOIN bots b ON b.id=u.bot_id ORDER BY b.id, u.first_seen")
+        if kind == "users.csv":
+            import csv, io
+            buf = io.StringIO()
+            w = csv.DictWriter(buf, fieldnames=["bot", "user_id", "first_name", "username", "first_seen", "last_seen", "blocked"])
+            w.writeheader()
+            w.writerows(data)
+            return _download(buf.getvalue(), "all_bots_users.csv", "text/csv")
+        return _download(json.dumps(data, indent=1, ensure_ascii=False), "all_bots_users.json", "application/json")
+    if kind == "commands.zip":
+        import zipfile, io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for b in core.rows("SELECT * FROM bots ORDER BY id"):
+                seen = set()
+                for c in core.rows("SELECT name, code FROM commands WHERE bot_id=?", (b["id"],)):
+                    base = re.sub(r"[^\w\-]+", "_", c["name"]).strip("_") or "command"
+                    fn, i = base, 1
+                    while fn.lower() in seen:
+                        i += 1
+                        fn = f"{base}_{i}"
+                    seen.add(fn.lower())
+                    z.writestr(f"{b['username']}/{fn}.py", f"# command: {c['name']}\n{c['code']}")
+        return _download(buf.getvalue(), "all_commands_py.zip", "application/zip")
+    if kind == "panel.db":
+        import sqlite3, tempfile
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+        tmp.close()
+        with core._lock:
+            dst = sqlite3.connect(tmp.name)
+            core._db.backup(dst)
+            dst.close()
+        body = open(tmp.name, "rb").read()
+        os.unlink(tmp.name)
+        return _download(body, f"botbench_{stamp}.db")
+    return None
 
 
 @app.get("/api/backup/all")
 @auth
 def backup_all():
-    with_data = request.args.get("data", "1") == "1"
-    snaps = [_bot_snapshot(b, with_data, True) for b in core.rows("SELECT * FROM bots ORDER BY id")]
-    doc = {"botbench_backup": 1, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "includes_data": with_data, "bots": snaps}
-    return _download(json.dumps(doc, indent=1, ensure_ascii=False, default=str),
-                     f"botbench_backup_{time.strftime('%Y%m%d_%H%M')}{'' if with_data else '_commands_only'}.json", "application/json")
+    return _backup_response("all.json" if request.args.get("data", "1") == "1" else "commands.json")
 
 
 @app.get("/api/backup/users")
 @auth
 def backup_users():
-    fmt = "csv" if request.args.get("format") == "csv" else "json"
-    data = core.rows("SELECT b.username bot, u.user_id, u.first_name, u.username, u.first_seen, u.last_seen, "
-                     "COALESCE(u.blocked,0) blocked FROM users u JOIN bots b ON b.id=u.bot_id ORDER BY b.id, u.first_seen")
-    if fmt == "csv":
-        import csv, io
-        buf = io.StringIO()
-        w = csv.DictWriter(buf, fieldnames=["bot", "user_id", "first_name", "username", "first_seen", "last_seen", "blocked"])
-        w.writeheader()
-        w.writerows(data)
-        return _download(buf.getvalue(), "all_bots_users.csv", "text/csv")
-    return _download(json.dumps(data, indent=1, ensure_ascii=False), "all_bots_users.json", "application/json")
+    return _backup_response("users.csv" if request.args.get("format") == "csv" else "users.json")
 
 
 @app.get("/api/backup/commands.zip")
 @auth
 def backup_commands_zip():
-    import zipfile, io
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for b in core.rows("SELECT * FROM bots ORDER BY id"):
-            seen = set()
-            for c in core.rows("SELECT name, code FROM commands WHERE bot_id=?", (b["id"],)):
-                base = re.sub(r"[^\w\-]+", "_", c["name"]).strip("_") or "command"
-                fn, i = base, 1
-                while fn.lower() in seen:
-                    i += 1
-                    fn = f"{base}_{i}"
-                seen.add(fn.lower())
-                z.writestr(f"{b['username']}/{fn}.py", f"# command: {c['name']}\n{c['code']}")
-    return _download(buf.getvalue(), "all_commands_py.zip", "application/zip")
+    return _backup_response("commands.zip")
 
 
 @app.get("/api/backup/db")
 @auth
 def backup_db():
-    import sqlite3, tempfile
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-    tmp.close()
-    with core._lock:
-        dst = sqlite3.connect(tmp.name)
-        core._db.backup(dst)
-        dst.close()
-    body = open(tmp.name, "rb").read()
-    os.unlink(tmp.name)
-    return _download(body, f"botbench_{time.strftime('%Y%m%d_%H%M')}.db")
+    return _backup_response("panel.db")
+
+
+@app.get("/api/backup/link")
+@auth
+def backup_link():
+    t, base = core.backup_token(), core.base_url().rstrip("/")
+    return jsonify(token=t, urls={k: f"{base}/backup/{t}/{k}" for k in BACKUP_KINDS})
+
+
+@app.post("/api/backup/link/regenerate")
+@auth
+def backup_link_regen():
+    core.backup_token(regenerate=True)
+    return backup_link()
+
+
+@app.get("/backup/<token>/<kind>")
+def backup_by_link(token, kind):
+    """The private 'database URL': anyone who has the link can download that backup, so treat it like a password."""
+    if not hmac.compare_digest(token, core.backup_token()) or kind not in BACKUP_KINDS:
+        return jsonify(error="not found"), 404
+    return _backup_response(kind)
 
 
 @app.post("/api/restore")
 @auth
 def restore():
+    j = request.json
     try:
-        doc = json.loads(request.json.get("content") or "")
-        bots = doc["bots"]
-    except Exception:
-        return jsonify(error="That isn't a Botbench backup file."), 400
-    made = updated = skipped = 0
-    for s in bots:
-        row = None
-        if s.get("token"):
-            row = core.one("SELECT * FROM bots WHERE token=?", (s["token"],))
-        if not row and s.get("username"):
-            row = core.one("SELECT * FROM bots WHERE username=?", (s["username"],))
-        if not row:
-            if not s.get("token"):
-                skipped += 1
-                continue
-            bid = core.run("INSERT INTO bots(name, username, token, version) VALUES(?,?,?,?)",
-                           (s.get("name"), s.get("username"), s["token"], s.get("version") or "1.0.0"))
-            made += 1
-        else:
-            bid = row["id"]
-            updated += 1
-        core.run("DELETE FROM commands WHERE bot_id=?", (bid,))
-        for c in s.get("commands", []):
-            core.run("INSERT OR REPLACE INTO commands(bot_id, name, code, folder) VALUES(?,?,?,?)",
-                     (bid, c["name"], c.get("code", ""), c.get("folder")))
-        for f in s.get("folders", []):
-            core.run("INSERT OR IGNORE INTO folders(bot_id, name) VALUES(?,?)", (bid, f))
-        core.run("DELETE FROM env WHERE bot_id=?", (bid,))
-        for e in s.get("env", []):
-            core.run("INSERT OR REPLACE INTO env(bot_id,k,v,raw) VALUES(?,?,?,?)", (bid, e["k"], e["v"], e.get("raw", 0)))
-        if s.get("miniapp"):
-            core.run("INSERT OR REPLACE INTO miniapps(bot_id, html) VALUES(?,?)", (bid, s["miniapp"]))
-        core.kv_apply(bid, "bot", s.get("bot_data"))
-        for uid, d in (s.get("user_data") or {}).items():
-            core.kv_apply(bid, f"user:{uid}", d)
-        for u in s.get("users", []):
-            core.run("INSERT OR REPLACE INTO users(bot_id,user_id,first_name,username,first_seen,last_seen,blocked) "
-                     "VALUES(?,?,?,?,?,?,?)", (bid, u["user_id"], u.get("first_name"), u.get("username"),
-                                               u.get("first_seen"), u.get("last_seen"), u.get("blocked") or 0))
-        core.invalidate(bid)
-        if s.get("was_running"):
-            core.start_bot(bid)
-    return jsonify(created=made, updated=updated, skipped=skipped)
+        raw = base64.b64decode(j["content_b64"]) if j.get("content_b64") else (j.get("content") or "")
+        doc = core.load_backup(raw)
+    except Exception as e:
+        return jsonify(error=str(e) if isinstance(e, ValueError) else "That isn't a Botbench backup file."), 400
+    return jsonify(**core.restore_doc(doc))
+
+
+@app.post("/api/restore_url")
+@auth
+def restore_url():
+    url = (request.json.get("url") or "").strip()
+    if not re.match(r"^https?://", url):
+        return jsonify(error="Paste a link that starts with http:// or https://"), 400
+    try:
+        r = requests.get(url, timeout=90)
+        r.raise_for_status()
+        if len(r.content) > 200 * 1024 * 1024:
+            return jsonify(error="That file is bigger than 200 MB."), 400
+        doc = core.load_backup(r.content)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=f"Couldn't read a backup from that link: {e}"), 400
+    return jsonify(**core.restore_doc(doc))
+
+
+@app.get("/api/backup/auto")
+@auth
+def auto_get():
+    return jsonify(core.auto_cfg())
+
+
+@app.put("/api/backup/auto")
+@auth
+def auto_put():
+    j, cfg = request.json, core.auto_cfg()
+    bid = j.get("bot_id")
+    if j.get("enabled") and not (bid and core.one("SELECT 1 FROM bots WHERE id=?", (bid,)) and str(j.get("chat_id", "")).strip()):
+        return jsonify(error="Choose a bot and enter your Telegram chat ID first."), 400
+    cfg.update(enabled=bool(j.get("enabled")), bot_id=bid, chat_id=str(j.get("chat_id", "")).strip(),
+               every_hours=max(1, min(168, int(j.get("every_hours") or 24))), with_data=bool(j.get("with_data", True)))
+    core.set_auto(cfg)
+    return jsonify(cfg)
+
+
+@app.post("/api/backup/auto/run")
+@auth
+def auto_run():
+    try:
+        return jsonify(core.run_auto_backup())
+    except Exception as e:
+        cfg = core.auto_cfg()
+        cfg["last_status"] = f"failed: {e}"[:200]
+        core.set_auto(cfg)
+        return jsonify(error=f"Couldn't send the backup: {e}"), 400
+
+
+# ---------- recycle bins ----------
+@app.get("/api/bots/<int:bid>/trash")
+@auth
+def cmd_trash(bid):
+    return jsonify(core.rows("SELECT id, name, folder, deleted_at, length(code)-length(replace(code, char(10), ''))+1 AS lines "
+                             "FROM trash_commands WHERE bot_id=? ORDER BY deleted_at DESC", (bid,)))
+
+
+@app.post("/api/bots/<int:bid>/trash/<int:tid>/restore")
+@auth
+def cmd_trash_restore(bid, tid):
+    name = core.restore_command(bid, tid)
+    return (jsonify(name=name), 200) if name else (jsonify(error="Not in the recycle bin."), 404)
+
+
+@app.delete("/api/bots/<int:bid>/trash/<int:tid>")
+@auth
+def cmd_trash_purge(bid, tid):
+    core.run("DELETE FROM trash_commands WHERE id=? AND bot_id=?", (tid, bid))
+    return jsonify(ok=True)
+
+
+@app.delete("/api/bots/<int:bid>/trash")
+@auth
+def cmd_trash_empty(bid):
+    core.run("DELETE FROM trash_commands WHERE bot_id=?", (bid,))
+    return jsonify(ok=True)
+
+
+@app.get("/api/trash/bots")
+@auth
+def bot_trash():
+    out = core.rows("SELECT id, name, username, deleted_at, n_commands, n_users FROM trash_bots ORDER BY deleted_at DESC")
+    for r in out:
+        r["days_left"] = max(0, int(core.TRASH_DAYS - (time.time() - r["deleted_at"]) / 86400))
+    return jsonify(out)
+
+
+@app.post("/api/trash/bots/<int:bid>/restore")
+@auth
+def bot_trash_restore(bid):
+    try:
+        return jsonify(id=core.restore_trashed_bot(bid))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.delete("/api/trash/bots/<int:bid>")
+@auth
+def bot_trash_purge(bid):
+    core.purge_trashed_bot(bid)
+    return jsonify(ok=True)
+
+
+@app.get("/api/overview")
+@auth
+def overview():
+    a_ = core.auto_cfg()
+    return jsonify(errors=_count("SELECT COUNT(*) c FROM errors"), trash_bots=_count("SELECT COUNT(*) c FROM trash_bots"),
+                   trash_commands=_count("SELECT COUNT(*) c FROM trash_commands"), trash_days=core.TRASH_DAYS,
+                   auto={"enabled": a_["enabled"], "last_ts": a_["last_ts"], "last_status": a_["last_status"],
+                         "every_hours": a_["every_hours"]},
+                   bots={str(b["id"]): {"errors": _count("SELECT COUNT(*) c FROM errors WHERE bot_id=?", b["id"])}
+                         for b in core.rows("SELECT id FROM bots")})
 
 
 @app.post("/api/restart_all")
@@ -839,6 +948,17 @@ def serve_mini(bid):
     return app.response_class(r["html"] if r else MINI_DEFAULT, mimetype="text/html")
 
 
+def _auto_restore():
+    """RESTORE_URL: when the database is empty (fresh deploy), load the backup from that link."""
+    url = os.environ.get("RESTORE_URL", "").strip()
+    if url and not core.one("SELECT 1 FROM bots LIMIT 1") and not core.one("SELECT 1 FROM trash_bots LIMIT 1"):
+        try:
+            print("RESTORE_URL:", core.restore_doc(core.load_backup(requests.get(url, timeout=90).content)))
+        except Exception as e:
+            print("RESTORE_URL failed:", e)
+
+
+_auto_restore()
 core.autostart()          # bots that were running (and new ones) come back on their own
 
 if __name__ == "__main__":

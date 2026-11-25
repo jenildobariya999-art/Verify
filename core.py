@@ -1,4 +1,4 @@
-import os, re, json, sqlite3, threading, subprocess, sys, time, queue
+import os, re, json, sqlite3, threading, subprocess, sys, time, queue, gzip, secrets as _secrets
 from concurrent.futures import ThreadPoolExecutor
 import requests
 from requests.adapters import HTTPAdapter
@@ -8,6 +8,7 @@ DB_PATH = os.environ.get("PANEL_DB", os.path.join(BASE, "panel.db"))
 SANDBOX = os.path.join(BASE, "sandbox.py")
 EXEC_TIMEOUT = int(os.environ.get("EXEC_TIMEOUT", "10"))
 WORKERS = int(os.environ.get("WORKERS", "4"))
+TRASH_DAYS = int(os.environ.get("TRASH_DAYS", "30"))
 TG_BASE = os.environ.get("TG_API_BASE", "https://api.telegram.org").rstrip("/")
 
 SCHEMA = """
@@ -31,6 +32,10 @@ CREATE TABLE IF NOT EXISTS scheduled(id TEXT PRIMARY KEY, bot_id INTEGER, user_i
 CREATE TABLE IF NOT EXISTS bcjobs(id TEXT PRIMARY KEY, bot_id INTEGER, ts REAL, function TEXT, command TEXT, kwargs TEXT,
   callback_url TEXT, status TEXT, total INTEGER, sent INTEGER, failed INTEGER);
 CREATE TABLE IF NOT EXISTS ctl(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, action TEXT);
+CREATE TABLE IF NOT EXISTS trash_commands(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, name TEXT, code TEXT,
+  folder TEXT, deleted_at REAL);
+CREATE TABLE IF NOT EXISTS trash_bots(id INTEGER PRIMARY KEY, name TEXT, username TEXT, deleted_at REAL, n_commands INTEGER,
+  n_users INTEGER, snapshot TEXT);
 CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER, ts REAL, level TEXT, text TEXT);
 CREATE INDEX IF NOT EXISTS idx_users_bot ON users(bot_id, last_seen);
 """
@@ -40,7 +45,7 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
     "ALTER TABLE bots ADD COLUMN translate INTEGER DEFAULT 0",
     "ALTER TABLE bots ADD COLUMN version TEXT DEFAULT '1.0.0'",
-    "ALTER TABLE commands ADD COLUMN folder TEXT", "ALTER TABLE pending ADD COLUMN options TEXT", "ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0", "ALTER TABLE bcjobs ADD COLUMN speed REAL",
+    "ALTER TABLE commands ADD COLUMN folder TEXT", "ALTER TABLE commands ADD COLUMN updated_at REAL", "ALTER TABLE pending ADD COLUMN options TEXT", "ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0", "ALTER TABLE bcjobs ADD COLUMN speed REAL",
 ]
 
 DEFAULT_START = '''# Runs when someone sends /start (or just "start")
@@ -443,24 +448,289 @@ def fire_hook(bot, command, uid, options=None, user_json=None):
     return res
 
 
+BOT_TABLES = ("commands", "kv", "pending", "users", "logs", "errors", "env", "folders", "miniapps", "broadcasts",
+              "scheduled", "bcjobs")
+
+
+def bot_snapshot(b, with_data=True, with_token=True):
+    bid = b["id"]
+    snap = {"id": bid, "name": b["name"], "username": b["username"], "version": b.get("version") or "1.0.0",
+            "was_running": bool(b["running"]),
+            "commands": [{"name": c["name"], "code": c["code"], "folder": c["folder"]} for c in
+                         rows("SELECT name, code, folder FROM commands WHERE bot_id=? ORDER BY name", (bid,))],
+            "folders": [r["name"] for r in rows("SELECT name FROM folders WHERE bot_id=?", (bid,))],
+            "env": rows("SELECT k, v, raw FROM env WHERE bot_id=?", (bid,)),
+            "miniapp": (one("SELECT html FROM miniapps WHERE bot_id=?", (bid,)) or {}).get("html")}
+    if with_token:
+        snap["token"] = b["token"]
+    if with_data:
+        snap["bot_data"] = kv_all(bid, "bot")
+        snap["user_data"] = {}
+        for r in rows("SELECT DISTINCT scope FROM kv WHERE bot_id=? AND scope LIKE 'user:%'", (bid,)):
+            snap["user_data"][r["scope"][5:]] = kv_all(bid, r["scope"])
+        snap["users"] = rows("SELECT user_id, first_name, username, first_seen, last_seen, blocked "
+                             "FROM users WHERE bot_id=?", (bid,))
+    return snap
+
+
+def backup_doc(with_data=True, with_token=True):
+    return {"botbench_backup": 1, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "includes_data": with_data,
+            "bots": [bot_snapshot(b, with_data, with_token) for b in rows("SELECT * FROM bots ORDER BY id")]}
+
+
+def restore_snapshot(bid, s):
+    """Write a snapshot into bot `bid`. Commands it replaces go to the recycle bin first."""
+    old = [r["id"] for r in rows("SELECT id FROM commands WHERE bot_id=?", (bid,))]
+    if old:
+        trash_commands(bid, old)
+    now = time.time()
+    for cm in s.get("commands", []):
+        run("INSERT OR REPLACE INTO commands(bot_id, name, code, folder, updated_at) VALUES(?,?,?,?,?)",
+            (bid, cm["name"], cm.get("code", ""), cm.get("folder"), now))
+    for f in s.get("folders", []):
+        run("INSERT OR IGNORE INTO folders(bot_id, name) VALUES(?,?)", (bid, f))
+    run("DELETE FROM env WHERE bot_id=?", (bid,))
+    for e in s.get("env", []):
+        run("INSERT OR REPLACE INTO env(bot_id,k,v,raw) VALUES(?,?,?,?)", (bid, e["k"], e["v"], e.get("raw", 0)))
+    if s.get("miniapp"):
+        run("INSERT OR REPLACE INTO miniapps(bot_id, html) VALUES(?,?)", (bid, s["miniapp"]))
+    kv_apply(bid, "bot", s.get("bot_data"))
+    for uid, d in (s.get("user_data") or {}).items():
+        kv_apply(bid, f"user:{uid}", d)
+    for u in s.get("users", []):
+        run("INSERT OR REPLACE INTO users(bot_id,user_id,first_name,username,first_seen,last_seen,blocked) VALUES(?,?,?,?,?,?,?)",
+            (bid, u["user_id"], u.get("first_name"), u.get("username"), u.get("first_seen"), u.get("last_seen"), u.get("blocked") or 0))
+    invalidate(bid)
+    if s.get("was_running"):
+        start_bot(bid)
+
+
+def load_backup(raw):
+    """bytes or text of a backup (JSON, optionally gzip) -> dict"""
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    if raw[:15] == b"SQLite format 3":
+        raise ValueError("That is a database file (.db). Restore needs a JSON backup; use the 'All bots with data' link instead.")
+    doc = json.loads(raw.decode("utf-8"))
+    if not isinstance(doc.get("bots"), list):
+        raise ValueError("That isn't a Botbench backup file.")
+    return doc
+
+
+def restore_doc(doc):
+    made = updated = skipped = 0
+    for s in doc["bots"]:
+        row = None
+        if s.get("token"):
+            row = one("SELECT * FROM bots WHERE token=?", (s["token"],))
+        if not row and s.get("username"):
+            row = one("SELECT * FROM bots WHERE username=?", (s["username"],))
+        if not row:
+            if not s.get("token"):
+                skipped += 1
+                continue
+            want = s.get("id")           # keep the bot id from the backup when it is free
+            if want and not one("SELECT 1 FROM bots WHERE id=?", (want,)) and not one("SELECT 1 FROM trash_bots WHERE id=?", (want,)):
+                run("INSERT INTO bots(id, name, username, token, version) VALUES(?,?,?,?,?)",
+                    (want, s.get("name"), s.get("username"), s["token"], s.get("version") or "1.0.0"))
+                bid = want
+            else:
+                bid = run("INSERT INTO bots(name, username, token, version) VALUES(?,?,?,?)",
+                          (s.get("name"), s.get("username"), s["token"], s.get("version") or "1.0.0"))
+            made += 1
+        else:
+            bid = row["id"]
+            updated += 1
+        restore_snapshot(bid, s)
+    return {"created": made, "updated": updated, "skipped": skipped}
+
+
+# ----- recycle bins -----
+def trash_commands(bot_id, ids):
+    now, n = time.time(), 0
+    for cid in ids:
+        r = one("SELECT * FROM commands WHERE id=? AND bot_id=?", (cid, bot_id))
+        if r:
+            run("INSERT INTO trash_commands(bot_id,name,code,folder,deleted_at) VALUES(?,?,?,?,?)",
+                (bot_id, r["name"], r["code"], r["folder"], now))
+            run("DELETE FROM commands WHERE id=?", (cid,))
+            n += 1
+    invalidate(bot_id)
+    return n
+
+
+def restore_command(bot_id, trash_id):
+    t = one("SELECT * FROM trash_commands WHERE id=? AND bot_id=?", (trash_id, bot_id))
+    if not t:
+        return None
+    have = {nraw(r["name"]) for r in rows("SELECT name FROM commands WHERE bot_id=?", (bot_id,))}
+    name, i = t["name"], 1
+    while nraw(name) in have:
+        i += 1
+        name = f'{t["name"]} (restored{"" if i == 2 else " " + str(i - 1)})'
+    run("INSERT INTO commands(bot_id,name,code,folder,updated_at) VALUES(?,?,?,?,?)",
+        (bot_id, name, t["code"], t["folder"], time.time()))
+    run("DELETE FROM trash_commands WHERE id=?", (trash_id,))
+    invalidate(bot_id)
+    return name
+
+
+def trash_bot(bot_id):
+    b = one("SELECT * FROM bots WHERE id=?", (bot_id,))
+    if not b:
+        return False
+    snap = bot_snapshot(b, True, True)
+    run("INSERT OR REPLACE INTO trash_bots(id,name,username,deleted_at,n_commands,n_users,snapshot) VALUES(?,?,?,?,?,?,?)",
+        (bot_id, b["name"], b["username"], time.time(), len(snap["commands"]), len(snap.get("users", [])),
+         json.dumps(snap, default=str, ensure_ascii=False)))
+    stop_bot(bot_id)
+    for t in BOT_TABLES:
+        run(f"DELETE FROM {t} WHERE bot_id=?", (bot_id,))
+    run("DELETE FROM bots WHERE id=?", (bot_id,))
+    invalidate(bot_id)
+    return True
+
+
+def restore_trashed_bot(bot_id):
+    t = one("SELECT * FROM trash_bots WHERE id=?", (bot_id,))
+    if not t:
+        raise ValueError("That bot is not in the recycle bin.")
+    snap = json.loads(t["snapshot"])
+    other = one("SELECT id, username FROM bots WHERE token=?", (snap.get("token"),))
+    if other:
+        raise ValueError(f"Bot @{other['username']} (id {other['id']}) in the panel already uses this token.")
+    free = not one("SELECT 1 FROM bots WHERE id=?", (bot_id,))
+    if free:      # keep the same bot id
+        bid = run("INSERT INTO bots(id, name, username, token, version) VALUES(?,?,?,?,?)",
+                  (bot_id, snap["name"], snap["username"], snap["token"], snap.get("version") or "1.0.0"))
+        bid = bot_id
+    else:
+        bid = run("INSERT INTO bots(name, username, token, version) VALUES(?,?,?,?)",
+                  (snap["name"], snap["username"], snap["token"], snap.get("version") or "1.0.0"))
+    restore_snapshot(bid, snap)
+    run("DELETE FROM trash_bots WHERE id=?", (bot_id,))
+    if bid != bot_id:
+        run("UPDATE trash_commands SET bot_id=? WHERE bot_id=?", (bid, bot_id))
+    return bid
+
+
+def purge_trashed_bot(bot_id):
+    run("DELETE FROM trash_bots WHERE id=?", (bot_id,))
+    run("DELETE FROM trash_commands WHERE bot_id=?", (bot_id,))
+
+
+def cleanup_trash():
+    cut = time.time() - TRASH_DAYS * 86400
+    run("DELETE FROM trash_commands WHERE deleted_at<?", (cut,))
+    for r in rows("SELECT id FROM trash_bots WHERE deleted_at<?", (cut,)):
+        purge_trashed_bot(r["id"])
+
+
+# ----- private backup links (the "database URL") -----
+def backup_token(regenerate=False):
+    t = get_setting("backup_token")
+    if regenerate or not t:
+        t = _secrets.token_urlsafe(24)
+        set_setting("backup_token", t)
+    return t
+
+
+# ----- automatic backup to a Telegram chat (free, off-site) -----
+def auto_cfg():
+    d = {"enabled": False, "bot_id": None, "chat_id": "", "every_hours": 24, "with_data": True, "last_ts": 0, "last_status": ""}
+    try:
+        d.update(json.loads(get_setting("autobackup") or "{}"))
+    except Exception:
+        pass
+    return d
+
+
+def set_auto(cfg):
+    set_setting("autobackup", json.dumps(cfg))
+
+
+def tg_send_file(token, chat_id, filename, data, caption=""):
+    r = SESSION.post(f"{TG_BASE}/bot{token}/sendDocument", data={"chat_id": chat_id, "caption": caption},
+                     files={"document": (filename, data)}, timeout=180)
+    j = r.json()
+    if not j.get("ok"):
+        raise RuntimeError(j.get("description", "Telegram error"))
+    return j["result"]
+
+
+def run_auto_backup():
+    cfg = auto_cfg()
+    bot = one("SELECT * FROM bots WHERE id=?", (cfg.get("bot_id"),)) if cfg.get("bot_id") else None
+    if not bot or not str(cfg.get("chat_id")).strip():
+        raise RuntimeError("Choose a bot and a chat ID first.")
+    with_data = bool(cfg.get("with_data"))
+    data = gzip.compress(json.dumps(backup_doc(with_data, True), ensure_ascii=False, default=str).encode("utf-8"))
+    note = ""
+    if len(data) > 49 * 1024 * 1024 and with_data:      # Telegram bots can send files up to 50 MB
+        data = gzip.compress(json.dumps(backup_doc(False, True), ensure_ascii=False, default=str).encode("utf-8"))
+        note = " (too big with data: commands only)"
+    n = one("SELECT COUNT(*) c FROM bots")["c"]
+    fn = f"botbench_backup_{time.strftime('%Y%m%d_%H%M')}.json.gz"
+    tg_send_file(bot["token"], str(cfg["chat_id"]).strip(), fn, data,
+                 f"Botbench backup · {n} bot(s) · {time.strftime('%Y-%m-%d %H:%M')}{note}")
+    cfg["last_ts"], cfg["last_status"] = time.time(), f"ok · {max(1, len(data) // 1024)} KB{note}"
+    set_auto(cfg)
+    return cfg
+
+
+def _autobackup_tick():
+    cfg = auto_cfg()
+    if cfg["enabled"] and time.time() - cfg["last_ts"] >= float(cfg["every_hours"]) * 3600:
+        try:
+            run_auto_backup()
+        except Exception as e:
+            cfg = auto_cfg()
+            cfg["last_status"] = f"failed: {e}"[:200]
+            cfg["last_ts"] = time.time() - float(cfg["every_hours"]) * 3600 + 600     # try again in 10 minutes
+            set_auto(cfg)
+
+
 BG = ThreadPoolExecutor(max_workers=8)
 
 
 def _control():
     for r in rows("SELECT * FROM ctl ORDER BY id LIMIT 20"):
         run("DELETE FROM ctl WHERE id=?", (r["id"],))
-        if r["action"] in ("stop", "restart"):
-            stop_bot(r["bot_id"])
-        if r["action"] in ("start", "restart"):
-            time.sleep(0.4) if r["action"] == "restart" else None
-            start_bot(r["bot_id"])
+        act, bid = r["action"], r["bot_id"]
+        try:
+            if act in ("stop", "restart"):
+                stop_bot(bid)
+            if act in ("start", "restart"):
+                if act == "restart":
+                    time.sleep(0.4)
+                start_bot(bid)
+            if act == "delete_bot":
+                trash_bot(bid)
+            elif act == "restore_bot":
+                restore_trashed_bot(bid)
+            elif act == "purge_bot":
+                purge_trashed_bot(bid)
+            elif act == "reindex":
+                invalidate(bid)
+            elif act == "backup_now":
+                run_auto_backup()
+        except Exception as e:
+            log(bid, "error", f"{act} failed: {e}")
 
 
 def _scheduler():
+    n = 0
     while True:
         time.sleep(1)
+        n += 1
         try:
             _control()
+            if n % 60 == 0:
+                _autobackup_tick()
+            if n % 3600 == 30:
+                cleanup_trash()
             for r in rows("SELECT * FROM scheduled WHERE run_at<=? ORDER BY run_at LIMIT 20", (time.time(),)):
                 bot = one("SELECT * FROM bots WHERE id=?", (r["bot_id"],))
                 if bot and not is_running(bot["id"]):

@@ -88,7 +88,7 @@ nav button.on svg{background:#8b5cf633;border-radius:8px;padding:3px;width:30px;
 .addtab{margin-left:auto;background:none;border:0;color:#d4d4d8;padding:12px 8px}
 .subbar{display:flex;align-items:center;gap:12px;padding:10px 0;color:#38bdf8;font-size:16px;border-bottom:1px solid #26262b;margin:0 -14px;padding-left:14px;padding-right:14px}
 .subbar span{color:#e4e4e7}.subbar .ic{color:#d4d4d8}
-.toolbar{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #26262b;margin:0 -14px;padding-left:14px;padding-right:14px;background:#141416}
+.toolbar{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #26262b;margin:0 -14px;padding-left:14px;padding-right:14px;background:#141416;position:sticky;top:calc(59px + env(safe-area-inset-top));z-index:12}
 .tb{background:#222225;border:0;border-radius:12px;color:#d4d4d8;width:42px;height:38px;display:grid;place-items:center;cursor:pointer}
 .tb.w{width:auto;padding:0 14px;display:flex;gap:8px;font-size:14.5px;align-items:center}
 .tb:disabled{opacity:.45}.sep{width:1px;height:30px;background:#34343a;margin:0 6px}
@@ -163,6 +163,12 @@ details.doc[open]>summary::after{transform:rotate(-135deg);margin-top:3px}detail
 .dn{flex:1;min-width:0;word-break:break-word;font-weight:600}.dn.mono{font:600 14px var(--mono);color:#c4b5fd}.dcat{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:#9ca3af;background:#1b1b20;border-radius:7px;padding:2px 8px;flex:none}
 .dbody{padding:4px 14px 12px}.doc pre.sig{margin:8px 0 0;background:#0b0b10;color:#a5b4fc}mark{background:#8b5cf655;color:#fff;border-radius:3px;padding:0 1px}
 .chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:0 0 8px;padding-bottom:2px}.chips::-webkit-scrollbar{display:none}.chips .chip{flex:none;font:13.5px var(--sans,inherit)}
+
+.tb.w.dirty{background:var(--pri);color:#fff;position:relative}.tb.w.dirty::after{content:"";position:absolute;top:6px;right:7px;width:8px;height:8px;border-radius:50%;background:#fbbf24}
+.stickybar{position:sticky;top:calc(59px + env(safe-area-inset-top));z-index:12;background:var(--card);padding:8px 0;margin:-4px 0 0}
+.binbtn{position:relative}.binbtn i{position:absolute;top:1px;right:0;min-width:17px;height:17px;border-radius:9px;background:var(--pri);color:#fff;font:600 11px/17px var(--mono);text-align:center;font-style:normal}
+.lkrow{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--line)}.lkrow:first-child{border-top:0}.lkurl{font-size:11.5px;color:#9ca3af;word-break:break-all;margin-top:2px}
+.errb{flex:none}.card select,.field select{font:inherit}
 @media(max-width:480px){.erow{grid-template-columns:1fr 1fr}.snip{max-width:48vw}}
 @media(min-width:900px){
   :root{--pad:34px}
@@ -189,9 +195,9 @@ details.doc[open]>summary::after{transform:rotate(-135deg);margin-top:3px}detail
 <script>
 const $=(s,r=document)=>r.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const P={home:'<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',bots:'<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',ai:'<path d="M10 3l1.8 5.2L17 10l-5.2 1.8L10 17l-1.8-5.2L3 10l5.2-1.8z"/><path d="M18 3v4M16 5h4M18 16v4M16 18h4"/>',earn:'<circle cx="12" cy="12" r="9"/><path d="M15 9.5c0-1.4-1.3-2.5-3-2.5s-3 1-3 2.3c0 3 6 1.7 6 4.7 0 1.3-1.3 2.5-3 2.5s-3-1.1-3-2.5M12 5.5v13"/>',more:'<path d="M4 7h16M4 12h16M4 17h16"/>',bell:'<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/>',back:'<path d="M15 5l-7 7 7 7"/>',arrow:'<path d="M19 12H5M11 6l-6 6 6 6"/>',gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>',users:'<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M17 14.2c2.4.2 4 2.2 4 4.8"/>',sliders:'<path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="9" r="2" fill="currentColor"/><circle cx="12" cy="15" r="2" fill="currentColor"/><circle cx="19" cy="8" r="2" fill="currentColor"/>',undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/>',copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',paste:'<rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/>',save:'<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',search:'<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.5-4.5"/>',wand:'<path d="M5 19L16 8"/><path d="M14 6l4 4"/><path d="M18 3v3M16.5 4.5h3M6 5v2M5 6h2"/>',code:'<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/>',plus:'<path d="M12 5v14M5 12h14"/>',eye:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',eyeoff:'<path d="M3 3l18 18"/><path d="M10 6.2A9.6 9.6 0 0 1 12 6c6.4 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.3 7.5C3.6 9.2 2 12 2 12s3.6 7 10 7c1.5 0 2.8-.4 4-1"/>',down:'<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',up:'<path d="M12 16V5M7 9l5-5 5 5M5 20h14"/>',chev:'<path d="M9 5l7 7-7 7"/>',layout:'<rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="14" y="13" width="7" height="8" rx="1.5"/>',alert:'<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',edit:'<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>',check:'<path d="M5 12l5 5 9-10"/>',folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',refresh:'<path d="M20 11a8 8 0 0 0-14-4M4 5v4h4M4 13a8 8 0 0 0 14 4M20 19v-4h-4"/>',lines:'<path d="M4 7h16M4 12h10M4 17h14"/>',stop:'<rect x="7" y="7" width="10" height="10" rx="2"/>',play:'<path d="M8 5l11 7-11 7z"/>',
-logo:'<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4.5M9 13v2M15 13v2"/>'};
+bin:'<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/>',dup:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V6a2 2 0 0 1 2-2h10M14 11v6M11 14h6"/>',logo:'<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4.5M9 13v2M15 13v2"/>'};
 const I=new Proxy({},{get:(_,k)=>`<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${P[k]||""}</svg>`});
-const S={page:"bots",bots:[],bot:null,tab:"intro",sub:"stats",folder:null,sel:new Set(),selMode:false,snip:false,folders:[],tick:null,sopt:{},cmds:[],open:[],cur:null,q:"",showTok:null,sheet:null};
+const S={page:"bots",bots:[],bot:null,tab:"intro",sub:"stats",sort:"az",binView:false,trashN:0,trashDays:30,folder:null,sel:new Set(),selMode:false,snip:false,folders:[],tick:null,sopt:{},cmds:[],open:[],cur:null,q:"",showTok:null,sheet:null};
 async function api(p,m="GET",b){const r=await fetch(p,{method:m,headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined});if(r.status==401){location.reload();return}const d=await r.json();if(!r.ok)throw new Error(d.error||"Something went wrong.");return d}
 function toast(t){const e=document.createElement("div");e.className="toast";e.textContent=t;document.body.append(e);setTimeout(()=>e.remove(),2200)}
 function ask(title,desc,ph,ok="OK",val=""){return new Promise(res=>{const d=$("#dlg");$("#dT").textContent=title;$("#dP").textContent=desc;$("#dI").placeholder=ph;$("#dI").value=val;$("#dO").textContent=ok;$("#dE").textContent="";
@@ -201,37 +207,26 @@ const ago=t=>{if(!t)return"never";const s=Date.now()/1e3-t;return s<90?"just now
 function frame(inner){
   $("#app").innerHTML=`<header><div><div class="logo">${I.logo}</div><h1>Botbench</h1><button class="bell" aria-label="Notifications">${I.bell}</button></div></header><div id="view">${inner}</div>
   <nav><div>${[["home","Home"],["bots","Bots"],["ai","AI"],["more","More"]].map(([k,l])=>`<button data-p="${k}" class="${S.page==k?"on":""}">${I[k]}<span>${l}</span></button>`).join("")}</div></nav>`;
-  document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{S.page=b.dataset.p;S.more="menu";if(S.page=="bots"&&!S.bot)S.cur=null;render()});
+  document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{S.page=b.dataset.p;S.more="menu";S.binView=false;if(S.page=="bots"&&!S.bot)S.cur=null;render()});
 }
 async function loadBots(){S.bots=await api("/api/bots");if(S.bot)S.bot=S.bots.find(b=>b.id==S.bot.id)||null;render()}
 async function loadCmds(){S.cmds=await api(`/api/bots/${S.bot.id}/commands`);render()}
-function openBot(b){S.bot=b;S.tab="intro";S.folder=null;S.sel=new Set();S.selMode=false;S.cur=null;S.open=[];S.cmds=[];S.page="bots";render();loadCmds()}
+function openBot(b){S.bot=b;S.binView=false;S.tab="intro";S.folder=null;S.sel=new Set();S.selMode=false;S.cur=null;S.open=[];S.cmds=[];S.page="bots";render();loadCmds()}
 async function addBot(){const t=await ask("Add a bot","Create a bot with @BotFather on Telegram, then paste its token here.","123456:ABC-DEF…","Add bot");if(!t)return;
   try{const b=await api("/api/bots","POST",{token:t});S.bots=await api("/api/bots");openBot(S.bots.find(x=>x.id==b.id))}catch(e){toast(e.message)}}
 
 function render(){({home:vHome,bots:vBots,ai:vAI,more:vMore}[S.page])()}
-function vHome(){const run=S.bots.filter(b=>b.running).length,u=S.bots.reduce((a,b)=>a+b.users,0);
-  frame(`<h2 class="page">Home</h2><div class="stats"><div><small>Bots</small><b>${S.bots.length}</b></div><div><small>Running</small><b class="g">${run}</b></div><div><small>Total users</small><b>${u}</b></div><div><small>Stopped</small><b class="o">${S.bots.length-run}</b></div></div>
-  ${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users</small></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Open the Bots tab to add one.</div>'}`);
-  document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)))}
+
 function vAI(){frame(`<h2 class="page">AI</h2><div class="card"><h4>AI assistant</h4><p>Describe a command in plain words and get Python code for it. This needs an AI provider key, which isn't connected to this panel yet.</p><div class="field"><input disabled placeholder="e.g. a /balance command that reads user data"></div></div>`)}
-function vBots(){clearInterval(S.tick);
-  if(!S.bot){frame(`<div class="row" style="margin-bottom:14px"><h2 class="page grow" style="margin:0">Your bots</h2><button class="btn sm" id="ab">${I.plus} Add bot</button></div>${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users</small></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Add the token of a bot you made with @BotFather.</div>'}`);
-    $("#ab").onclick=addBot;document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)));return}
-  if(S.cur!=null)return vEditor();
-  const T=[["intro","layout","Intro"],["commands","code","Commands"],["search","search","Search"],["miniapp","code","Mini App"],["errors","alert","Errors"],["manage","gear","Manage"],["admin","users","Admin"],["settings","sliders","Settings"]];
-  frame(`<div class="seg-row"><button class="circ" id="bk" aria-label="Back to bots">${I.back}</button><div class="seg">${T.map(([k,i,l])=>`<button data-t="${k}" class="${S.tab==k?"on":""}">${I[i]}<span>${l}</span></button>`).join("")}</div></div><div id="body"></div>`);
-  $("#bk").onclick=()=>{S.bot=null;render()};
-  document.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{S.tab=b.dataset.t;vBots()});
-  ({intro:tIntro,commands:tCommands,search:tSearch,miniapp:tMiniApp,errors:tErrors,manage:tManage,admin:tAdmin,settings:tSettings}[S.tab])();$(".seg .on")?.scrollIntoView({inline:"center",block:"nearest"})}
 
 const when=t=>{const d=new Date(t*1e3),n=new Date(),hm=d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",hour12:false});const k=Math.round((new Date(n.getFullYear(),n.getMonth(),n.getDate())-new Date(d.getFullYear(),d.getMonth(),d.getDate()))/864e5);return k==0?`Today at ${hm}`:k==1?`Yesterday at ${hm}`:`${d.toLocaleDateString(undefined,{day:"numeric",month:"short"})} at ${hm}`};
+const alive=el=>!!el&&document.body.contains(el);
 const hms=s=>[s/3600|0,s/60%60|0,s%60].map(x=>String(x).padStart(2,"0")).join(":");
 const importUsersCard=()=>`<div class="card"><h4>Import users</h4><p>JSON, CSV or TXT with Telegram user IDs: our export or another platform's. Every ID is checked with Telegram through this bot and only users it can reach are added, about 10 a second, so a big list takes hours. You can leave this page.</p><div class="file"><label class="btn">Choose file<input type="file" id="uf" accept=".json,.csv,.txt"></label><span id="un2">No file chosen</span></div></div>`;
 function bindImportUsers(id){$("#uf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#un2").textContent=f.name;try{const r=await api(`/api/bots/${id}/import_users`,"POST",{content:await f.text()});toast(`Checking ${r.count} user IDs in the background`)}catch(x){toast(x.message)}}}
 
 /* ---------- Intro ---------- */
-async function tIntro(){const B=$("#body"),id=S.bot.id,r=await api(`/api/bots/${id}/intro`);
+async function tIntro(){const B=$("#body"),id=S.bot.id,r=await api(`/api/bots/${id}/intro`);if(!alive(B))return;
   B.innerHTML=`<div class="card hero"><div class="avatar">${esc((r.name||"?").slice(0,2).toUpperCase())}</div><div class="grow"><h3>${esc(r.name)}</h3><a class="un" href="https://t.me/${esc(r.username)}" target="_blank" rel="noopener">@${esc(r.username)}</a><div class="meta">${r.bot_id} · <span class="${r.running?"g":""}">● ${r.running?"Active":"Stopped"}</span></div></div><button class="btn sm ${r.running?"stop":""}" id="tg">${I[r.running?"stop":"play"]}${r.running?"Stop":"Start"}</button></div>
   <div class="tri"><div><small>Users</small><b>${r.users}</b></div><div><small>Commands</small><b>${r.commands}</b></div><div><small>Uptime</small><b id="upt">${hms(r.uptime)}</b></div></div>
   <div class="card rows"><div class="kvr"><span>Last active</span><span>${r.last_active?new Date(r.last_active*1e3).toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"}):"never"}</span></div><div class="kvr"><span>Version</span><span>v${esc(r.version)}</span></div></div>
@@ -242,24 +237,8 @@ async function tIntro(){const B=$("#body"),id=S.bot.id,r=await api(`/api/bots/${
   if(r.running){let u=r.uptime;S.tick=setInterval(()=>{const e=$("#upt");if(e)e.textContent=hms(++u)},1000)}}
 
 /* ---------- Commands ---------- */
-async function tCommands(){S.folders=await api(`/api/bots/${S.bot.id}/folders`);if(!S.cmds.length)S.cmds=await api(`/api/bots/${S.bot.id}/commands`);drawCommands()}
-function drawCommands(){const B=$("#body"),q=S.q.toLowerCase();
-  const L=S.cmds.filter(c=>(S.folder==null||c.folder===S.folder)&&c.name.toLowerCase().includes(q));
-  B.innerHTML=`<div class="card tools"><div class="field">${I.search}<input id="q" placeholder="Search" value="${esc(S.q)}"></div><button class="sq ${S.snip?"on":""}" id="sn" title="Show code preview" aria-label="Show code preview">${I.code}</button><button class="sq ${S.selMode?"on":""}" id="sm" title="Select" aria-label="Select commands">${I.check}</button><button class="sq" id="dl" title="Delete selected" aria-label="Delete selected" ${S.sel.size?"":"disabled"}>${I.trash}</button><button class="btn sm sqb" id="nc" aria-label="New command">${I.plus}</button></div>
-  ${S.selMode&&S.sel.size?`<div class="card tools"><span class="grow">${S.sel.size} selected</span><select id="mv" aria-label="Move to folder"><option value="">Move to…</option><option value="__none">No folder</option>${S.folders.map(f=>`<option>${esc(f)}</option>`).join("")}</select></div>`:""}
-  <div class="clist">${L.map(c=>`<div class="crow" data-id="${c.id}">${S.selMode?`<input type="checkbox" class="cb" ${S.sel.has(c.id)?"checked":""} aria-label="Select ${esc(c.name)}">`:`<span class="ci">${I.code}</span>`}<div class="grow"><span class="cn">${esc(c.name)}</span>${S.snip?`<div class="snip">${esc(c.code.trim().split("\n").slice(0,2).join("  ⏎  ").slice(0,90))}</div>`:""}</div><button class="ic" data-e="${c.id}" aria-label="Edit ${esc(c.name)}">${I.edit}</button><button class="ic rd" data-d="${c.id}" aria-label="Delete ${esc(c.name)}">${I.trash}</button></div>`).join("")||'<div class="empty">No commands here yet.</div>'}</div>
-  <div class="fbar"><button class="ar" id="fl" aria-label="Scroll folders left">${I.back}</button><div class="fpills" id="fp"><button class="fp ${S.folder==null?"on":""}" data-f="">${I.folder}All <span class="n">${S.cmds.length}</span></button>${S.folders.map(f=>`<button class="fp ${S.folder===f?"on":""}" data-f="${esc(f)}">${esc(f)} <span class="n">${S.cmds.filter(c=>c.folder===f).length}</span></button>`).join("")}</div><button class="ar" id="fr" aria-label="Scroll folders right">${I.chev}</button><button class="gear" id="fg" aria-label="Manage folders">${I.gear}</button></div>`;
-  const id=S.bot.id,reload=async()=>{S.cmds=await api(`/api/bots/${id}/commands`);S.folders=await api(`/api/bots/${id}/folders`);S.sel.clear();drawCommands()};
-  $("#q").oninput=e=>{S.q=e.target.value;drawCommands();const i=$("#q");i.focus();i.setSelectionRange(S.q.length,S.q.length)};
-  $("#sn").onclick=()=>{S.snip=!S.snip;drawCommands()};$("#sm").onclick=()=>{S.selMode=!S.selMode;S.sel.clear();drawCommands()};$("#nc").onclick=newCmd;
-  $("#dl").onclick=async()=>{if(!S.sel.size||!confirm(`Delete ${S.sel.size} command(s)? This can't be undone.`))return;await api(`/api/bots/${id}/commands/bulk`,"POST",{ids:[...S.sel],action:"delete"});S.open=S.open.filter(i=>!S.sel.has(i));await reload()};
-  $("#mv")&&($("#mv").onchange=async e=>{if(!e.target.value)return;await api(`/api/bots/${id}/commands/bulk`,"POST",{ids:[...S.sel],action:"move",folder:e.target.value=="__none"?null:e.target.value});toast("Moved");await reload()});
-  document.querySelectorAll(".crow").forEach(r=>r.onclick=e=>{const cid=+r.dataset.id;if(e.target.closest("[data-e],[data-d]"))return;if(S.selMode){S.sel.has(cid)?S.sel.delete(cid):S.sel.add(cid);drawCommands()}else openCmd(cid)});
-  document.querySelectorAll("[data-e]").forEach(b=>b.onclick=()=>openCmd(+b.dataset.e));
-  document.querySelectorAll("[data-d]").forEach(b=>b.onclick=async()=>{const c=S.cmds.find(x=>x.id==b.dataset.d);if(!confirm(`Delete ${c.name}?`))return;await api(`/api/commands/${c.id}`,"DELETE");S.open=S.open.filter(i=>i!=c.id);await reload()});
-  document.querySelectorAll(".fp").forEach(b=>b.onclick=()=>{S.folder=b.dataset.f||null;drawCommands()});
-  $("#fl").onclick=()=>$("#fp").scrollBy({left:-160,behavior:"smooth"});$("#fr").onclick=()=>$("#fp").scrollBy({left:160,behavior:"smooth"});
-  $("#fg").onclick=folderSheet}
+
+
 function folderSheet(){const id=S.bot.id,el=document.createElement("div");el.className="sheet";document.body.append(el);
   const draw=()=>{el.innerHTML=`<div class="row"><b class="grow">Folders</b><button class="btn ghost sm" id="fx">Done</button></div>${S.folders.map(f=>`<div class="kv row"><b class="grow">${esc(f)}</b><button class="ic" data-r="${esc(f)}" aria-label="Rename ${esc(f)}">${I.edit}</button><button class="ic rd" data-x="${esc(f)}" aria-label="Delete ${esc(f)}">${I.trash}</button></div>`).join("")||'<p class="mut">No folders yet. Folders group your commands.</p>'}<div class="act" style="margin-top:10px"><div class="field"><input id="nf" placeholder="New folder name"></div><button class="btn sm" id="af">Create</button></div>`;
     const refresh=async()=>{S.folders=await api(`/api/bots/${id}/folders`);S.cmds=await api(`/api/bots/${id}/commands`);draw()};
@@ -273,7 +252,7 @@ async function newCmd(){const n=await ask("New command","Type what users send, l
 function openCmd(id){if(!S.open.includes(id))S.open.push(id);S.cur=id;S.tab="commands";S.sheet=null;render()}
 
 /* ---------- Search & replace ---------- */
-async function tSearch(){const B=$("#body"),id=S.bot.id;if(!S.cmds.length)S.cmds=await api(`/api/bots/${id}/commands`);
+async function tSearch(){const B=$("#body"),id=S.bot.id;if(!S.cmds.length)S.cmds=await api(`/api/bots/${id}/commands`);if(!alive(B))return;
   const O=S.sopt,hist=()=>{try{return JSON.parse(localStorage.getItem("bb_hist")||"[]")}catch{return[]}};
   B.innerHTML=`<div class="card"><div class="field mono">${I.search}<input id="sq" placeholder="Search across all command code…" autocomplete="off" spellcheck="false"></div>
   <div class="row" style="margin:10px 0;flex-wrap:wrap"><button class="chip ${O.case?"on":""}" data-o="case" title="Match case" aria-label="Match case">Aa</button><button class="chip ${O.word?"on":""}" data-o="word" title="Whole word" aria-label="Whole word">|ab|</button><button class="chip ${O.regex?"on":""}" data-o="regex" title="Regular expression" aria-label="Regular expression">.*</button><button class="lnk" id="hs">${I.clock} History</button></div>
@@ -377,6 +356,30 @@ bot.send("Hello boss")</pre><h4>Friendly error message (the <code>!</code> comma
 ];
 /* API reference: [category, name, signature, description, example, extra search words]. [[x]] shows as code. */
 const REF=[
+["Account","Account.delete_bot / restore_bot / purge_bot / get_deleted_bots","Account.delete_bot(botid)   Account.restore_bot(botid)   Account.purge_bot(botid)   Account.get_deleted_bots()","Recycle bin for bots, addressed by bot ID. [[delete_bot]] stops a bot and moves it (commands, data, users, token) to the bin; [[restore_bot]] brings it back with the same ID; [[purge_bot]] deletes it for good. Bins keep items for 30 days (TRASH_DAYS). The change happens within a second.",
+`# command: /bin
+for b in Account.get_deleted_bots():
+    bot.sendMessage(f"{b.botid} @{b.username}: {b.commands} commands, {b.users} users")
+Account.restore_bot(12345678)      # use the bot ID from the list`,"recycle bin trash deleted restore undo remove accounts bot id"],
+["Account","Account.get_bot_commands / delete_command / restore_command / get_deleted_commands","Account.delete_command(botid, name)   Account.restore_command(botid, name_or_id)   Account.get_deleted_commands(botid)   Account.purge_command(botid, name_or_id=None)","The command recycle bin of any bot in this panel, by bot ID. [[delete_command]] moves a command to that bot's bin, [[restore_command]] brings it back (a name clash becomes “name (restored)”), [[purge_command]] removes one item for good or empties the bin when called without a name.",
+`# command: /undo
+for d in Account.get_deleted_commands(bot_id):
+    bot.sendMessage(f"{d.id}: {d.name} ({d.lines} lines)")
+print(Account.restore_command(bot_id, "/promo"))`,"recycle bin trash deleted command restore undo accounts bot id"],
+["Account","Account.get_backup_url / send_backup","Account.get_backup_url(\"all.json\")   Account.send_backup()","[[get_backup_url]] returns your private backup link (kinds: all.json, commands.json, users.csv, users.json, commands.zip, panel.db). [[send_backup]] sends a backup file to the Telegram chat set in More → Auto-backup.",
+`# command: /backup
+bot.sendMessage("Backup link:\\n" + Account.get_backup_url("all.json"), parse_mode=None)
+Account.send_backup()`,"accounts database url link download export"],
+["Data","Bot.getDeletedCommands / deleteCommand / restoreCommand","Bot.deleteCommand(name)   Bot.getDeletedCommands()   Bot.restoreCommand(name_or_id)   Bot.purgeCommand(name_or_id=None)","The same command recycle bin for the current bot.",
+`# command: /drop
+print(Bot.deleteCommand("/old-promo"))
+print([d.name for d in Bot.getDeletedCommands()])
+print(Bot.restoreCommand("/old-promo"))`,"recycle bin trash undo"],
+["Panel","Database link (backup URL)","More → Database link","A private link, made for you, that downloads a backup: all.json (everything), commands.json, users.csv, users.json, commands.zip or panel.db. It needs no extra database and costs nothing. Paste the all.json link into More → Restore from a link on another panel (for example Render → Hostinger) to move all bots with their data. Anyone with the link can download your data: use Make a new link if it was shared.","","database url backup link export download move migrate free no mongodb neon"],
+["Panel","Auto-backup to Telegram","More → Auto-backup to Telegram","Free off-site backup: choose a bot, your Telegram ID and how often; the panel sends a compressed backup file (.json.gz) to your chat. Over 50 MB it sends commands only. After a fresh deploy or on a host that wipes its disk, download the latest file and use More → Restore.","","backup telegram schedule automatic cloud free render wipe persistent"],
+["Panel","RESTORE_URL (restore on a fresh deploy)","RESTORE_URL=https://…/backup/…/all.json","Set this environment variable and the panel loads that backup when it starts with an empty database, for example after a free Render deploy wiped its disk. Point it at the all.json link of a panel that is still running, or at any web address that serves a backup file.","","render environment fresh start empty database restore automatically persistent"],
+["Panel","Recycle bin (bots and commands)","Commands → bin icon · Bots → Recycle bin · More → Recycle bin","Deleting a command or a bot moves it to a bin for 30 days. Restore brings it back (bots return with the same ID, token and data). Replacing commands by Import or Restore also puts the old ones in the bin.","","trash deleted undo restore recover"],
+["Panel","Unsaved changes, drafts, duplicate and sort","editor Save button · Commands list","The Save button and the editor toolbar stay at the top while you scroll, and turn purple when there are unsaved changes. Your text is also kept in this browser, so a refresh or a closed tab gives it back. Duplicate copies a command; the clock button sorts by recently edited.","","save sticky draft autosave duplicate copy sort recent"],
 ["Webhook","libs.Webhook.getUrlFor","libs.Webhook.getUrlFor(command, user_id=u)","Returns a signed link to this panel. When anything calls it (a browser, a payment gateway, another server; GET or POST), [[command]] runs for [[user_id]] and receives the request as [[options]]. It needs a public HTTPS address ([[PUBLIC_URL]]). A link that was changed or made for another command or user is rejected.",
 `# command: /Verify
 webhook = libs.Webhook.getUrlFor(
@@ -594,49 +597,148 @@ function vDocs(){
   })}
 
 /* ---------- More ---------- */
+
+/* ---------- Delete bot ---------- */
+
+
+
+/* ---------- Home ---------- */
+function vHome(){const run=S.bots.filter(b=>b.running).length,u=S.bots.reduce((a,b)=>a+b.users,0);
+  frame(`<h2 class="page">Home</h2><div class="stats"><div><small>Bots</small><b>${S.bots.length}</b></div><div><small>Running</small><b class="g">${run}</b></div><div><small>Total users</small><b>${u}</b></div><div><small>Stopped</small><b class="o">${S.bots.length-run}</b></div></div>
+  <div id="ov"></div>
+  ${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users · id ${b.id}</small></span><span class="errb" data-e="${b.id}"></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Open the Bots tab to add one.</div>'}`);
+  document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)));
+  api("/api/overview").then(o=>{S.trashDays=o.trash_days;const el=$("#ov");if(!el||S.page!="home")return;
+    const a=o.auto,backup=a.enabled?`On, every ${a.every_hours} h · last ${a.last_ts?ago(a.last_ts):"never"}${a.last_status?` (${esc(a.last_status)})`:""}`:"Not set up";
+    el.innerHTML=`<div class="card rows"><button class="lr" id="hErr"><span>Errors (all bots)</span><span class="v ${o.errors?"r":""}">${o.errors}</span>${I.chev}</button><button class="lr" id="hBin"><span>Recycle bin</span><span class="v">${o.trash_bots} bots · ${o.trash_commands} commands</span>${I.chev}</button><button class="lr" id="hBk"><span>Backup</span><span class="v" style="text-align:right">${backup}</span>${I.chev}</button></div>`;
+    $("#hErr").onclick=()=>{const b=S.bots.find(x=>(o.bots[x.id]||{}).errors)||S.bots[0];if(b){S.tab="errors";openBot(b);S.tab="errors"}};
+    $("#hBin").onclick=()=>{S.page="bots";S.bot=null;S.binView=true;render()};
+    $("#hBk").onclick=()=>{S.page="more";S.more="menu";render()};
+    document.querySelectorAll(".errb").forEach(x=>{const n=(o.bots[x.dataset.e]||{}).errors;if(n)x.innerHTML=`<span class="badge">${n} error${n==1?"":"s"}</span>`})})}
+
+/* ---------- Bots list + bot recycle bin ---------- */
+async function vBotBin(){
+  frame(`<div class="seg-row"><button class="circ" id="bb" aria-label="Back to bots">${I.back}</button><h2 class="page grow" style="margin:0">Recycle bin</h2></div><p class="mut" style="margin:0 2px 12px;font-size:14px">Deleted bots keep their commands, data, users and token. Restore one and it comes back with the same bot ID. Items are removed for good after ${S.trashDays} days.</p><div id="bl"></div>`);
+  $("#bb").onclick=()=>{S.binView=false;vBots()};
+  const draw=async()=>{const L=await api("/api/trash/bots");
+    $("#bl").innerHTML=L.map(b=>`<div class="card"><div class="row"><div class="grow"><b style="font-size:16px">${esc(b.name)}</b><div class="mut" style="font-size:13.5px">@${esc(b.username)} · id ${b.id}</div></div><span class="badge" style="background:#1b1b20;color:#9ca3af">${b.days_left} d left</span></div><div class="mut" style="font-size:13.5px;margin:8px 0 12px">deleted ${ago(b.deleted_at)} · ${b.n_commands} commands · ${b.n_users} users</div><div class="act"><button class="btn sm" data-r="${b.id}">Restore</button><button class="btn red sm" data-x="${b.id}">Delete forever</button></div></div>`).join("")||'<div class="empty">The recycle bin is empty.</div>';
+    document.querySelectorAll("[data-r]").forEach(x=>x.onclick=async()=>{try{await api(`/api/trash/bots/${x.dataset.r}/restore`,"POST");toast("Bot restored");S.binView=false;S.cmds=[];await loadBots()}catch(e){toast(e.message)}});
+    document.querySelectorAll("[data-x]").forEach(x=>x.onclick=async()=>{if(!confirm("Delete this bot for good? Its commands, data and users cannot be brought back."))return;await api(`/api/trash/bots/${x.dataset.x}`,"DELETE");toast("Deleted for good");draw()})};
+  draw()}
+function vBots(){clearInterval(S.tick);
+  if(!S.bot){if(S.binView)return vBotBin();
+    frame(`<div class="row" style="margin-bottom:10px"><h2 class="page grow" style="margin:0">Your bots</h2><button class="btn sm" id="ab">${I.plus} Add bot</button></div><button class="lnk" id="binb" style="margin:0 0 12px">${I.bin} Recycle bin <span class="mut" id="bn"></span></button>${S.bots.map(b=>`<button class="list-item" data-id="${b.id}"><span class="dot ${b.running?"on":""}"></span><span class="grow"><b>${esc(b.name)}</b><small>@${esc(b.username)} · ${b.users} users · id ${b.id}</small></span>${I.chev}</button>`).join("")||'<div class="empty">No bots yet. Add the token of a bot you made with @BotFather.</div>'}`);
+    $("#ab").onclick=addBot;$("#binb").onclick=()=>{S.binView=true;vBots()};
+    api("/api/trash/bots").then(L=>{const e=$("#bn");if(e)e.textContent=L.length?`(${L.length})`:""});
+    document.querySelectorAll(".list-item").forEach(e=>e.onclick=()=>openBot(S.bots.find(b=>b.id==e.dataset.id)));return}
+  if(S.cur!=null)return vEditor();
+  const T=[["intro","layout","Intro"],["commands","code","Commands"],["search","search","Search"],["miniapp","code","Mini App"],["errors","alert","Errors"],["manage","gear","Manage"],["admin","users","Admin"],["settings","sliders","Settings"]];
+  frame(`<div class="seg-row"><button class="circ" id="bk" aria-label="Back to bots">${I.back}</button><div class="seg">${T.map(([k,i,l])=>`<button data-t="${k}" class="${S.tab==k?"on":""}">${I[i]}<span>${l}</span></button>`).join("")}</div></div><div id="body"></div>`);
+  $("#bk").onclick=()=>{S.bot=null;render()};
+  document.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>{S.tab=b.dataset.t;vBots()});
+  ({intro:tIntro,commands:tCommands,search:tSearch,miniapp:tMiniApp,errors:tErrors,manage:tManage,admin:tAdmin,settings:tSettings}[S.tab])();$(".seg .on")?.scrollIntoView({inline:"center",block:"nearest"})}
+
+/* ---------- Commands ---------- */
+async function tCommands(){const id=S.bot.id;S.folders=await api(`/api/bots/${id}/folders`);if(!S.cmds.length)S.cmds=await api(`/api/bots/${id}/commands`);S.trashN=(await api(`/api/bots/${id}/trash`)).length;if(S.tab!="commands"||S.cur!=null||!$("#body"))return;drawCommands()}
+function drawCommands(){const B=$("#body"),q=S.q.toLowerCase();
+  let L=S.cmds.filter(c=>(S.folder==null||c.folder===S.folder)&&c.name.toLowerCase().includes(q));
+  L=S.sort=="recent"?[...L].sort((a,b)=>(b.updated_at||0)-(a.updated_at||0)):[...L].sort((a,b)=>a.name.localeCompare(b.name));
+  B.innerHTML=`<div class="card tools"><div class="field">${I.search}<input id="q" placeholder="Search" value="${esc(S.q)}"></div><button class="sq ${S.sort=="recent"?"on":""}" id="so" title="${S.sort=="recent"?"Sorted by recently edited":"Sorted A to Z"}" aria-label="Sort order">${I.clock}</button><button class="sq ${S.snip?"on":""}" id="sn" title="Show code preview" aria-label="Show code preview">${I.code}</button><button class="sq ${S.selMode?"on":""}" id="sm" title="Select" aria-label="Select commands">${I.check}</button>${S.selMode?`<button class="sq" id="dl" title="Delete selected" aria-label="Delete selected" ${S.sel.size?"":"disabled"}>${I.trash}</button>`:""}<button class="sq binbtn" id="bn" title="Recycle bin" aria-label="Recycle bin">${I.bin}${S.trashN?`<i>${S.trashN}</i>`:""}</button><button class="btn sm sqb" id="nc" aria-label="New command">${I.plus}</button></div>
+  ${S.selMode&&S.sel.size?`<div class="card tools"><span class="grow">${S.sel.size} selected</span><select id="mv" aria-label="Move to folder"><option value="">Move to…</option><option value="__none">No folder</option>${S.folders.map(f=>`<option>${esc(f)}</option>`).join("")}</select></div>`:""}
+  <div class="clist">${L.map(c=>`<div class="crow" data-id="${c.id}">${S.selMode?`<input type="checkbox" class="cb" ${S.sel.has(c.id)?"checked":""} aria-label="Select ${esc(c.name)}">`:`<span class="ci">${I.code}</span>`}<div class="grow"><span class="cn">${esc(c.name)}</span>${S.sort=="recent"&&c.updated_at?`<div class="snip">edited ${ago(c.updated_at)}</div>`:""}${S.snip?`<div class="snip">${esc(c.code.trim().split("\n").slice(0,2).join("  ⏎  ").slice(0,90))}</div>`:""}</div><button class="ic" data-e="${c.id}" aria-label="Edit ${esc(c.name)}">${I.edit}</button><button class="ic" data-p="${c.id}" aria-label="Duplicate ${esc(c.name)}">${I.dup}</button><button class="ic rd" data-d="${c.id}" aria-label="Move ${esc(c.name)} to the recycle bin">${I.trash}</button></div>`).join("")||'<div class="empty">No commands here yet.</div>'}</div>
+  <div class="fbar"><button class="ar" id="fl" aria-label="Scroll folders left">${I.back}</button><div class="fpills" id="fp"><button class="fp ${S.folder==null?"on":""}" data-f="">${I.folder}All <span class="n">${S.cmds.length}</span></button>${S.folders.map(f=>`<button class="fp ${S.folder===f?"on":""}" data-f="${esc(f)}">${esc(f)} <span class="n">${S.cmds.filter(c=>c.folder===f).length}</span></button>`).join("")}</div><button class="ar" id="fr" aria-label="Scroll folders right">${I.chev}</button><button class="gear" id="fg" aria-label="Manage folders">${I.gear}</button></div>`;
+  const id=S.bot.id,reload=async()=>{S.cmds=await api(`/api/bots/${id}/commands`);S.folders=await api(`/api/bots/${id}/folders`);S.trashN=(await api(`/api/bots/${id}/trash`)).length;S.sel.clear();drawCommands()};
+  $("#q").oninput=e=>{S.q=e.target.value;drawCommands();const i=$("#q");i.focus();i.setSelectionRange(S.q.length,S.q.length)};
+  $("#so").onclick=()=>{S.sort=S.sort=="recent"?"az":"recent";toast(S.sort=="recent"?"Newest edits first":"A to Z");drawCommands()};
+  $("#sn").onclick=()=>{S.snip=!S.snip;drawCommands()};$("#sm").onclick=()=>{S.selMode=!S.selMode;S.sel.clear();drawCommands()};$("#nc").onclick=newCmd;$("#bn").onclick=cmdBinSheet;
+  $("#dl")&&($("#dl").onclick=async()=>{if(!S.sel.size||!confirm(`Move ${S.sel.size} command(s) to the recycle bin? You can restore them for ${S.trashDays} days.`))return;await api(`/api/bots/${id}/commands/bulk`,"POST",{ids:[...S.sel],action:"delete"});S.open=S.open.filter(i=>!S.sel.has(i));toast("Moved to the recycle bin");await reload()});
+  $("#mv")&&($("#mv").onchange=async e=>{if(!e.target.value)return;await api(`/api/bots/${id}/commands/bulk`,"POST",{ids:[...S.sel],action:"move",folder:e.target.value=="__none"?null:e.target.value});toast("Moved");await reload()});
+  document.querySelectorAll(".crow").forEach(r=>r.onclick=e=>{const cid=+r.dataset.id;if(e.target.closest("[data-e],[data-d],[data-p]"))return;if(S.selMode){S.sel.has(cid)?S.sel.delete(cid):S.sel.add(cid);drawCommands()}else openCmd(cid)});
+  document.querySelectorAll("[data-e]").forEach(b=>b.onclick=()=>openCmd(+b.dataset.e));
+  document.querySelectorAll("[data-p]").forEach(b=>b.onclick=async()=>{try{const n=await api(`/api/commands/${b.dataset.p}/duplicate`,"POST");toast(`Duplicated as ${n.name}`);await reload()}catch(e){toast(e.message)}});
+  document.querySelectorAll("[data-d]").forEach(b=>b.onclick=async()=>{const c=S.cmds.find(x=>x.id==b.dataset.d);if(!confirm(`Move ${c.name} to the recycle bin? You can restore it for ${S.trashDays} days.`))return;await api(`/api/commands/${c.id}`,"DELETE");S.open=S.open.filter(i=>i!=c.id);toast("Moved to the recycle bin");await reload()});
+  document.querySelectorAll(".fp").forEach(b=>b.onclick=()=>{S.folder=b.dataset.f||null;drawCommands()});
+  $("#fl").onclick=()=>$("#fp").scrollBy({left:-160,behavior:"smooth"});$("#fr").onclick=()=>$("#fp").scrollBy({left:160,behavior:"smooth"});
+  $("#fg").onclick=folderSheet}
+async function cmdBinSheet(){const id=S.bot.id,el=document.createElement("div");el.className="sheet";document.body.append(el);
+  const draw=async()=>{const L=await api(`/api/bots/${id}/trash`);S.trashN=L.length;
+    el.innerHTML=`<div class="row"><b class="grow">Recycle bin · ${L.length}</b>${L.length?'<button class="btn ghost sm" id="eb">Empty</button>':""}<button class="btn ghost sm" id="bx">Done</button></div><p class="mut" style="font-size:13px;margin:6px 0 2px">Deleted commands are kept ${S.trashDays} days, then removed for good.</p>${L.map(t=>`<div class="kv row"><div class="grow"><b>${esc(t.name)}</b><div class="mut" style="font-size:12.5px">deleted ${ago(t.deleted_at)} · ${t.lines} lines${t.folder?" · "+esc(t.folder):""}</div></div><button class="lnk" data-r="${t.id}">Restore</button><button class="ic rd" data-x="${t.id}" aria-label="Delete forever">${I.trash}</button></div>`).join("")||'<div class="empty" style="padding:18px 0">Nothing here.</div>'}`;
+    $("#bx").onclick=()=>{el.remove();drawCommands()};
+    $("#eb")&&($("#eb").onclick=async()=>{if(!confirm("Delete everything in this recycle bin for good?"))return;await api(`/api/bots/${id}/trash`,"DELETE");draw()});
+    el.querySelectorAll("[data-r]").forEach(b=>b.onclick=async()=>{try{const r=await api(`/api/bots/${id}/trash/${b.dataset.r}/restore`,"POST");S.cmds=await api(`/api/bots/${id}/commands`);toast(`Restored as ${r.name}`);draw()}catch(e){toast(e.message)}});
+    el.querySelectorAll("[data-x]").forEach(b=>b.onclick=async()=>{if(!confirm("Delete this command for good?"))return;await api(`/api/bots/${id}/trash/${b.dataset.x}`,"DELETE");draw()})};
+  draw()}
+
+/* ---------- Mini App (Save stays visible) ---------- */
+async function tMiniApp(){const B=$("#body"),id=S.bot.id,m=await api(`/api/bots/${id}/miniapp`);if(!alive(B))return;
+  B.innerHTML=`<div class="card"><h4>Mini app</h4><div class="act stickybar" style="flex-wrap:wrap"><button class="btn sm" id="ms">${I.save} Save</button><a class="btn ghost sm" href="/m/${id}" target="_blank" rel="noopener" style="text-decoration:none">${I.eye} Preview</a><button class="btn ghost sm" id="mb">Set as menu button</button></div><p style="margin-top:10px">Write the web page that opens inside Telegram. It's served at <span class="mono" style="word-break:break-all">${esc(m.url)}</span></p><textarea class="minitext" id="mh" spellcheck="false" aria-label="Mini app HTML">${esc(m.html)}</textarea></div>`;
+  $("#ms").onclick=async()=>{await api(`/api/bots/${id}/miniapp`,"PUT",{html:$("#mh").value});toast("Saved")};
+  $("#mb").onclick=async()=>{const t=await ask("Menu button","Text on the button next to the message box in your bot (16 characters max). Telegram needs this site to be on HTTPS.","Open","Set button","Open");if(!t)return;try{await api(`/api/bots/${id}/miniapp`,"PUT",{html:$("#mh").value});await api(`/api/bots/${id}/miniapp/menu`,"POST",{text:t});toast("Menu button set")}catch(e){toast(e.message)}}}
+
+/* ---------- More ---------- */
+const LINKS=[["all.json","All bots with data","JSON: everything, to restore on another panel"],["commands.json","Commands only","JSON: commands, folders, variables, mini apps"],["users.csv","Users","CSV for Excel or Sheets"],["users.json","Users","JSON"],["commands.zip","Commands as .py files","ZIP, one folder per bot"],["panel.db","Database file","the whole panel (.db)"]];
+const b64=async f=>{const u=new Uint8Array(await f.arrayBuffer());let s="";for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)};
 function vMore(){
   if(S.more=="docs")return vDocs();
   const dl=(href,t,s)=>`<a class="lr" href="${href}" download>${I.down}<span class="grow"><b>${t}</b><small class="mut" style="display:block">${s}</small></span></a>`;
   frame(`<h2 class="page">More</h2>
-  <button class="list-item" id="mDocs">${I.lines}<span class="grow"><b>Docs</b><small>How to build bots with Python, with examples to copy</small></span>${I.chev}</button>
-  <div class="card"><h4>Backup</h4><p>Keep backup files private: they contain bot tokens and user data.</p><div class="rows" style="padding:0">
+  <button class="list-item" id="mDocs">${I.lines}<span class="grow"><b>Docs</b><small>How to build bots with Python, searchable, with examples to copy</small></span>${I.chev}</button>
+  <button class="list-item" id="mBin">${I.bin}<span class="grow"><b>Recycle bin</b><small id="binInfo">Deleted bots can be restored</small></span>${I.chev}</button>
+  <div class="card"><h4>Database link</h4><p>A private link that gives you a backup, no extra database needed. Open it in a browser to download, or paste it into <b>Restore from a link</b> on another panel to move everything. Anyone who has the link can download your data, so keep it private.</p><div id="lk" class="mut">Loading…</div><div class="act" style="margin-top:12px"><button class="btn ghost sm" id="lkr">Make a new link</button></div></div>
+  <div class="card"><h4>Auto-backup to Telegram</h4><p>Free and off-site: the panel sends a backup file to your Telegram chat on a schedule. Keep those files: after a fresh install use <b>Restore</b> with one of them.</p><div id="ab"><span class="mut">Loading…</span></div></div>
+  <div class="card"><h4>Download a backup</h4><div class="rows" style="padding:0">
     ${dl("/api/backup/all?data=1","All bots with data","Commands, folders, variables, bot data, user data and users (JSON)")}
     ${dl("/api/backup/all?data=0","All bots, commands only","Commands, folders, variables and mini apps (JSON)")}
     ${dl("/api/backup/users?format=json","Only users, JSON","Every user of every bot")}
     ${dl("/api/backup/users?format=csv","Only users, CSV","Opens in Excel or Google Sheets")}
     ${dl("/api/backup/commands.zip","All commands as .py files","One folder per bot (ZIP)")}
     ${dl("/api/backup/db","Database file (.db)","The whole panel, exactly as it is")}</div></div>
-  <div class="card"><h4>Restore</h4><p>Load a backup made here. Bots found by token or username are updated, new ones are added.</p><div class="file"><label class="btn">Choose backup file<input type="file" id="rf" accept=".json"></label><span id="rn2">No file chosen</span></div></div>
+  <div class="card"><h4>Restore</h4><p>Load a backup made here (.json or .json.gz). Bots found by token or username are updated, new ones are added with their old bot ID. Commands that get replaced go to the recycle bin.</p><div class="file"><label class="btn">Choose backup file<input type="file" id="rf" accept=".json,.gz,application/json,application/gzip"></label><span id="rn2">No file chosen</span></div>
+    <h4 style="margin-top:14px">Restore from a link</h4><div class="act"><div class="field"><input id="ru" placeholder="https://…/backup/…/all.json" autocomplete="off" spellcheck="false"></div><button class="btn dim sm" id="rub" style="min-height:44px">Restore</button></div></div>
   <div class="card"><h4>Tools</h4><div class="rows" style="padding:0">
     <button class="lr" id="mAdd">${I.plus}<span class="grow">Add a bot</span></button>
     <button class="lr" id="mRe">${I.refresh}<span class="grow">Restart all running bots</span></button>
     <button class="lr" id="mSys">${I.gear}<span class="grow">System info</span></button>
     <a class="lr" href="/logout" style="text-decoration:none">${I.arrow}<span class="grow">Sign out</span></a></div></div>`);
   $("#mDocs").onclick=()=>{S.more="docs";S.dq="";render()};$("#mAdd").onclick=addBot;
-  $("#rf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#rn2").textContent=f.name;if(!confirm("Restore from this backup? Commands of matching bots are replaced by the ones in the file."))return;
-    try{const r=await api("/api/restore","POST",{content:await f.text()});toast(`${r.created} added, ${r.updated} updated${r.skipped?`, ${r.skipped} skipped (no token)`:""}`);S.cmds=[];await loadBots()}catch(x){toast(x.message)}};
+  $("#mBin").onclick=()=>{S.page="bots";S.bot=null;S.binView=true;render()};
+  api("/api/overview").then(o=>{S.trashDays=o.trash_days;const e=$("#binInfo");if(e)e.textContent=`${o.trash_bots} bots · ${o.trash_commands} commands · kept ${o.trash_days} days`});
+  const copy=async t=>{try{await navigator.clipboard.writeText(t);toast("Link copied")}catch{prompt("Copy this link:",t)}};
+  const drawLinks=async(regen)=>{const d=await api(regen?"/api/backup/link/regenerate":"/api/backup/link",regen?"POST":"GET");if(!$("#lk"))return;
+    $("#lk").innerHTML=LINKS.map(([k,t,s])=>`<div class="lkrow"><div class="grow"><b>${t}</b> <span class="mut">· ${s}</span><div class="mono lkurl">${esc(d.urls[k])}</div></div><button class="lnk" data-c="${k}">Copy</button></div>`).join("")+(d.urls["all.json"].startsWith("http://localhost")?'<p class="mut" style="font-size:13px;margin:8px 0 0">These links use localhost. Set PUBLIC_URL to your site address so they work from other devices.</p>':"");
+    $("#lk").querySelectorAll("[data-c]").forEach(b=>b.onclick=()=>copy(d.urls[b.dataset.c]))};
+  drawLinks(false);
+  $("#lkr").onclick=async()=>{if(!confirm("Make a new link? The old links stop working."))return;await drawLinks(true);toast("New link made")};
+  api("/api/backup/auto").then(a=>{if(!$("#ab"))return;const bots=S.bots;
+    $("#ab").innerHTML=`<label class="chk"><input type="checkbox" id="ae" ${a.enabled?"checked":""}>Send backups automatically</label>
+    <div class="field" style="margin-bottom:10px"><select id="abot" aria-label="Bot that sends the backup" style="flex:1;background:none;border:0;color:var(--ink);font-size:15px;padding:10px 0">${bots.length?bots.map(b=>`<option value="${b.id}" ${a.bot_id==b.id?"selected":""}>Send with @${esc(b.username)}</option>`).join(""):"<option value=''>Add a bot first</option>"}</select></div>
+    <div class="field mono" style="margin-bottom:10px"><input id="achat" inputmode="numeric" placeholder="Your Telegram ID, e.g. 123456789" value="${esc(a.chat_id||"")}"></div>
+    <div class="field" style="margin-bottom:10px"><select id="aev" aria-label="How often" style="flex:1;background:none;border:0;color:var(--ink);font-size:15px;padding:10px 0">${[[6,"Every 6 hours"],[12,"Every 12 hours"],[24,"Every day"],[72,"Every 3 days"],[168,"Every week"]].map(([h,t])=>`<option value="${h}" ${a.every_hours==h?"selected":""}>${t}</option>`).join("")}</select></div>
+    <label class="chk"><input type="checkbox" id="ad" ${a.with_data?"checked":""}>Include user data and users (bigger file)</label>
+    <div class="act" style="flex-wrap:wrap"><button class="btn sm" id="as">Save</button><button class="btn ghost sm" id="an">Send a backup now</button></div>
+    <p class="mut" style="font-size:13px;margin:10px 0 0" id="ast">${a.last_ts?`Last backup ${ago(a.last_ts)}: ${esc(a.last_status)}`:"No backup sent yet."} Message the chosen bot once first so it is allowed to write to you. Get your ID from @userinfobot.</p>`;
+    const val=()=>({enabled:$("#ae").checked,bot_id:+$("#abot").value||null,chat_id:$("#achat").value,every_hours:+$("#aev").value,with_data:$("#ad").checked});
+    $("#as").onclick=async()=>{try{await api("/api/backup/auto","PUT",val());toast("Saved")}catch(e){toast(e.message)}};
+    $("#an").onclick=async()=>{try{await api("/api/backup/auto","PUT",{...val(),enabled:$("#ae").checked});$("#ast").textContent="Sending…";const r=await api("/api/backup/auto/run","POST");$("#ast").textContent=`Last backup just now: ${r.last_status}`;toast("Backup sent to Telegram")}catch(e){$("#ast").textContent=e.message;toast(e.message)}}});
+  $("#rf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#rn2").textContent=f.name;if(!confirm("Restore from this backup? Commands of matching bots are replaced (the old ones go to the recycle bin)."))return;
+    try{const r=await api("/api/restore","POST",{content_b64:await b64(f)});toast(`${r.created} added, ${r.updated} updated${r.skipped?`, ${r.skipped} skipped (no token)`:""}`);S.cmds=[];await loadBots()}catch(x){toast(x.message)}};
+  $("#rub").onclick=async()=>{const u=$("#ru").value.trim();if(!u)return toast("Paste a backup link first.");if(!confirm("Restore from this link?"))return;
+    try{toast("Downloading backup…");const r=await api("/api/restore_url","POST",{url:u});toast(`${r.created} added, ${r.updated} updated`);S.cmds=[];await loadBots()}catch(x){toast(x.message)}};
   $("#mRe").onclick=async()=>{const r=await api("/api/restart_all","POST");toast(`Restarted ${r.restarted} bot(s)`);setTimeout(loadBots,600)};
   $("#mSys").onclick=async()=>{const s=await api("/api/system"),el=document.createElement("div");el.className="sheet";
     el.innerHTML=`<div class="row"><b class="grow">System info</b><button class="btn ghost sm" id="sx2">Close</button></div><div class="rows" style="padding:0">${[["Panel uptime",hms(s.uptime)],["Bots running",`${s.running} of ${s.bots}`],["Worker processes",s.workers],["Command time limit",s.timeout+" s"],["Scheduled tasks",s.scheduled],["Database",s.db_mb+" MB"],["Python",s.python+" on "+s.platform],["Public URL",s.public_url]].map(([k,v])=>`<div class="kvr"><span>${k}</span><span style="text-align:right;word-break:break-all">${esc(v)}</span></div>`).join("")}</div>`;
     document.body.append(el);$("#sx2",el).onclick=()=>el.remove()}}
 
-/* ---------- Delete bot ---------- */
-const dangerCard=()=>`<div class="card danger"><h4>Delete bot</h4><p>Permanently remove this bot, its commands, data, users and errors from the panel. The bot itself on Telegram is not touched. Download a backup first (More → Backup).</p><button class="btn full red" id="dlb">${I.trash} Delete bot</button></div>`;
+/* ---------- Delete bot (goes to the recycle bin) ---------- */
+const dangerCard=()=>`<div class="card danger"><h4>Delete bot</h4><p>Moves this bot to the Recycle bin with its commands, data, users and token. You can restore it (same bot ID) for ${S.trashDays} days, then it is removed for good. The bot itself on Telegram is not touched.</p><button class="btn full red" id="dlb">${I.trash} Delete bot</button></div>`;
 async function deleteBot(){const b=S.bot;
-  const t=await ask("Delete bot",`This deletes @${b.username} and everything saved for it. Type its username to confirm.`,b.username,"Delete bot");if(t===null)return;
+  const t=await ask("Delete bot",`@${b.username} moves to the Recycle bin and stops. Type its username to confirm.`,b.username,"Delete bot");if(t===null)return;
   if(t.trim().replace(/^@/,"").toLowerCase()!==b.username.toLowerCase())return toast("That username doesn't match. Nothing was deleted.");
-  try{await api(`/api/bots/${b.id}`,"DELETE");S.bot=null;S.cmds=[];S.cur=null;S.open=[];toast("Bot deleted");await loadBots()}catch(e){toast(e.message)}}
-
-/* ---------- Mini App ---------- */
-async function tMiniApp(){const B=$("#body"),id=S.bot.id,m=await api(`/api/bots/${id}/miniapp`);
-  B.innerHTML=`<div class="card"><h4>Mini app</h4><p>Write the web page that opens inside Telegram. It's served at <span class="mono" style="word-break:break-all">${esc(m.url)}</span></p><textarea class="minitext" id="mh" spellcheck="false" aria-label="Mini app HTML">${esc(m.html)}</textarea>
-  <div class="act" style="flex-wrap:wrap"><button class="btn sm" id="ms">${I.save} Save</button><a class="btn ghost sm" href="/m/${id}" target="_blank" rel="noopener" style="text-decoration:none">${I.eye} Preview</a><button class="btn ghost sm" id="mb">Set as menu button</button></div></div>`;
-  $("#ms").onclick=async()=>{await api(`/api/bots/${id}/miniapp`,"PUT",{html:$("#mh").value});toast("Saved")};
-  $("#mb").onclick=async()=>{const t=await ask("Menu button","Text on the button next to the message box in your bot (16 characters max). Telegram needs this site to be on HTTPS.","Open","Set button","Open");if(!t)return;try{await api(`/api/bots/${id}/miniapp`,"PUT",{html:$("#mh").value});await api(`/api/bots/${id}/miniapp/menu`,"POST",{text:t});toast("Menu button set")}catch(e){toast(e.message)}}}
+  try{await api(`/api/bots/${b.id}`,"DELETE");S.bot=null;S.cmds=[];S.cur=null;S.open=[];toast("Moved to the Recycle bin");await loadBots()}catch(e){toast(e.message)}}
 
 /* ---------- Errors ---------- */
 async function tErrors(){const B=$("#body"),id=S.bot.id;
-  const load=async()=>{const L=await api(`/api/bots/${id}/errors`);
+  const load=async()=>{const L=await api(`/api/bots/${id}/errors`);if(!alive(B))return;
     B.innerHTML=`<div class="card errhead"><div class="row"><span class="r">${I.alert}</span><b class="et">Errors</b><span class="badge2">${L.length}</span><span class="grow"></span><button class="ic" id="rf" aria-label="Refresh">${I.refresh}</button><button class="lnk red" id="cl2">${I.trash} Clear</button></div></div>
     ${L.map(e=>`<div class="ecard"><div class="en">${esc(e.command||"—")}</div><pre class="em">${esc(e.message)}</pre><button class="sm2" hidden>Show More ↓</button><div class="ef"><span>LEVEL: <b class="r">${esc(e.level)}</b></span><span>Line: ${e.line??"—"}</span><span>${when(e.ts)}</span></div></div>`).join("")||'<div class="empty">No errors. Your commands are running clean.</div>'}`;
     B.querySelectorAll(".ecard").forEach(c=>{const p=$(".em",c),b=$(".sm2",c);if(p.scrollHeight>p.clientHeight+2)b.hidden=false;b.onclick=()=>{c.classList.toggle("open");b.textContent=c.classList.contains("open")?"Show Less ↑":"Show More ↓"}});
@@ -644,7 +746,7 @@ async function tErrors(){const B=$("#body"),id=S.bot.id;
   load()}
 
 /* ---------- Manage ---------- */
-async function tManage(){const B=$("#body"),id=S.bot.id,ver=(await api(`/api/bots/${id}/intro`)).version;let env=await api(`/api/bots/${id}/env`),raw=false;
+async function tManage(){const B=$("#body"),id=S.bot.id,ver=(await api(`/api/bots/${id}/intro`)).version;let env=await api(`/api/bots/${id}/env`),raw=false;if(!alive(B))return;
   B.innerHTML=`<div class="card"><h4>Update version <span class="mut">— current: ${esc(ver)}</span></h4><div class="act"><div class="field"><input id="nv" placeholder="e.g. 1.0.0"></div><button class="btn dim sm" id="uv" style="min-height:44px">Update</button></div></div>
   <div class="card"><div class="row"><h4 class="grow" style="margin:0">Environment variables</h4><button class="lnk" id="er">Edit raw ›</button></div><p class="mut" style="margin:10px 0;font-size:14px">Injected as globals into every command (e.g. <code>APP_URL</code>, <code>ADMIN_IDS</code>). Values are strings unless you mark a row <b style="color:var(--ink)">raw</b> (for numbers, lists, <code>{...}</code>).</p><div id="envb"></div><button class="lnk" id="av">+ Add variable</button><div class="right"><button class="btn sm" id="se">Save .env</button></div></div>
   <div class="card"><h4>Export users</h4><div class="radios">${["json","csv"].map((f,i)=>`<label><input type="radio" name="uf" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><label class="chk"><input type="checkbox" id="la" checked>Last Active Date</label><label class="chk"><input type="checkbox" id="cd" checked>Creation Date</label><button class="btn full" id="eu">${I.down} Export</button></div>${importUsersCard()}${dangerCard()}`;
@@ -670,16 +772,18 @@ function hlLine(l){let o="",i=0,m;RX.lastIndex=0;while((m=RX.exec(l))){o+=esc(l.
 const hlAll=v=>v.split("\n").map(l=>`<div${/:\s*(#.*)?$/.test(l)?' class="fold"':""}>${hlLine(l)||" "}</div>`).join("");
 function vEditor(){
   const c=S.cmds.find(x=>x.id==S.cur);if(!c){S.cur=null;return vBots()}
-  c.draft??=c.code;c.h??=[c.draft];c.hi??=c.h.length-1;
+  c.draft??=c.code;
+  try{const dr=localStorage.getItem('bb_draft_'+c.id);if(dr!==null&&dr!==c.code&&c.draft===c.code&&c.h===undefined){c.draft=dr;toast('Recovered your unsaved changes')}}catch{}
+  c.h??=[c.draft];c.hi??=c.h.length-1;
   frame(`<div class="tabs">${S.open.map(id=>{const t=S.cmds.find(x=>x.id==id);return t?`<div class="tab ${id==S.cur?"":"off"}" data-id="${id}"><span class="py">PY</span><span>${esc(t.name)}</span><button class="x" data-x="${id}" aria-label="Close ${esc(t.name)}">×</button></div>`:""}).join("")}<button class="addtab" id="nt" aria-label="New command">${I.plus}</button></div>
-  <div class="subbar">${I.code}<span id="rn" title="Rename" style="cursor:pointer">${esc(c.name)}</span><button class="ic" id="cp" aria-label="Copy code">${I.copy}</button><button class="ic" id="fd" aria-label="Find">${I.search}</button><button class="ic" id="rt" aria-label="Run test">${I.wand}</button></div>
+  <div class="subbar">${I.code}<span id="rn" title="Rename" style="cursor:pointer">${esc(c.name)}</span><button class="ic" id="cp" aria-label="Copy code">${I.copy}</button><button class="ic" id="fd" aria-label="Find">${I.search}</button><button class="ic" id="dp" aria-label="Duplicate command">${I.dup}</button><button class="ic" id="rt" aria-label="Run test">${I.wand}</button></div>
   <div class="toolbar"><button class="tb" id="un" aria-label="Undo">${I.undo}</button><button class="tb" id="re" aria-label="Redo">${I.redo}</button><span class="sep"></span><button class="tb" id="cp2" aria-label="Copy">${I.copy}</button><button class="tb" id="ps" aria-label="Paste">${I.paste}</button><span class="grow"></span><button class="tb w" id="bk2">${I.arrow}Back</button><button class="tb w" id="sv">${I.save}Save</button></div>
   <div class="ed"><div class="hl" id="hl"></div><textarea id="ta" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="Python code"></textarea></div>
   ${S.sheet?`<div class="sheet"><div class="row"><b class="grow">Test run</b><button class="btn ghost sm" id="sx">Close</button></div><pre>${S.sheet}</pre></div>`:""}`);
   const ta=$("#ta"),hl=$("#hl");ta.value=c.draft;
-  const paint=()=>{hl.innerHTML=hlAll(ta.value);ta.style.height="auto";ta.style.height=Math.max(ta.scrollHeight,innerHeight*.6)+"px";$("#un").disabled=c.hi<=0;$("#re").disabled=c.hi>=c.h.length-1};
+  const paint=()=>{hl.innerHTML=hlAll(ta.value);ta.style.height="auto";ta.style.height=Math.max(ta.scrollHeight,innerHeight*.6)+"px";$("#un").disabled=c.hi<=0;$("#re").disabled=c.hi>=c.h.length-1;$("#sv").classList.toggle("dirty",ta.value!==c.code)};
   let last=0;const push=()=>{c.draft=ta.value;if(c.h[c.hi]===ta.value)return;if(Date.now()-last<700&&c.hi>0&&c.hi==c.h.length-1)c.h[c.hi]=ta.value;else{c.h=c.h.slice(0,c.hi+1);c.h.push(ta.value);c.hi++}last=Date.now()};
-  ta.oninput=()=>{push();paint()};
+  ta.oninput=()=>{push();paint();try{ta.value!==c.code?localStorage.setItem('bb_draft_'+c.id,ta.value):localStorage.removeItem('bb_draft_'+c.id)}catch{}};
   ta.onkeydown=e=>{const s=ta.selectionStart;
     if(e.key=="Tab"){e.preventDefault();ta.setRangeText("    ",s,ta.selectionEnd,"end");ta.oninput()}
     else if(e.key=="Enter"){e.preventDefault();const ln=ta.value.slice(0,s).split("\n").pop();const ind=ln.match(/^\s*/)[0]+(/:\s*$/.test(ln)?"    ":"");ta.setRangeText("\n"+ind,s,ta.selectionEnd,"end");ta.oninput()}
@@ -690,8 +794,9 @@ function vEditor(){
   $("#cp").onclick=copy;$("#cp2").onclick=copy;
   $("#ps").onclick=async()=>{try{const t=await navigator.clipboard.readText();ta.setRangeText(t,ta.selectionStart,ta.selectionEnd,"end");ta.oninput()}catch{toast("Paste isn't allowed in this browser")}};
   $("#fd").onclick=async()=>{const q=await ask("Find in code","","Text to find","Find");if(!q)return;const i=ta.value.indexOf(q);if(i<0)return toast("Not found");ta.focus();ta.setSelectionRange(i,i+q.length)};
-  async function save(){try{const r=await api(`/api/commands/${c.id}`,"PUT",{name:c.name,code:ta.value});c.code=r.code;c.draft=r.code;toast("Saved")}catch(e){toast(e.message)}}
-  $("#sv").onclick=save;$("#bk2").onclick=()=>{S.cur=null;S.sheet=null;render()};
+  async function save(){try{const r=await api(`/api/commands/${c.id}`,"PUT",{name:c.name,code:ta.value});c.code=r.code;c.draft=r.code;try{localStorage.removeItem("bb_draft_"+c.id)}catch{}$("#sv")?.classList.remove("dirty");toast("Saved")}catch(e){toast(e.message)}}
+  $("#sv").onclick=save;
+  $("#dp").onclick=async()=>{for(let i=1;i<=6;i++){try{const nm=`${c.name} copy${i>1?" "+i:""}`;const n=await api(`/api/bots/${S.bot.id}/commands`,"POST",{name:nm,code:ta.value,folder:c.folder});S.cmds=await api(`/api/bots/${S.bot.id}/commands`);toast(`Duplicated as ${n.name}`);return openCmd(n.id)}catch(e){if(!/already exists/.test(e.message))return toast(e.message)}}};$("#bk2").onclick=()=>{S.cur=null;S.sheet=null;render()};
   $("#nt").onclick=newCmd;
   $("#rn").onclick=async()=>{const n=await ask("Rename command","This is the text users send.","name","Rename",c.name);if(!n||n==c.name)return;try{const r=await api(`/api/commands/${c.id}`,"PUT",{name:n,code:ta.value});c.name=r.name;c.code=c.draft=r.code;toast("Renamed");vEditor()}catch(e){toast(e.message)}};
   document.querySelectorAll(".tab").forEach(t=>t.onclick=e=>{if(e.target.dataset.x)return;S.cur=+t.dataset.id;S.sheet=null;render()});
@@ -738,8 +843,8 @@ function tSettings(){const b=S.bot,B=$("#body"),id=b.id,botId=b.token_hint?"":""
   <div class="card"><h4>Import users</h4><p>Upload a JSON, CSV or TXT with Telegram user IDs: our export or another platform's. Every ID is checked with Telegram through this bot and only users it can reach are added, about 10 a second, so a big list takes hours. You can leave this page.</p><div class="file"><label class="btn">Choose file<input type="file" id="uf" accept=".json,.csv,.txt"></label><span id="un2">No file chosen</span></div></div>
   <div class="card"><h4>Export bot</h4><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="ef" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><label class="chk"><input type="checkbox" id="eo">Commands Only</label><label class="chk"><input type="checkbox" id="ed">Include Bot Data</label><button class="btn full" id="ex">${I.down} Export</button></div>
   <div class="card"><h4>Import commands</h4><p>Upload or paste an exported bot file (JSON / YAML / TXT). Existing commands are updated, new ones added — ideal for editing your bot with AI, then re-uploading.</p><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="if" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><div class="file"><label class="btn">Choose file<input type="file" id="cf" accept=".json,.yaml,.yml,.txt"></label><span id="cn">No file chosen</span></div><textarea class="paste" id="cx" placeholder="…or paste your exported commands here"></textarea><label class="chk"><input type="checkbox" id="rp">Replace all existing commands</label><button class="btn full" id="im">${I.up} Import</button></div>`;
-  api(`/api/bots/${id}/token`).then(r=>{$("#bid").value=r.token.split(":")[0];S.tokV=r.token;});
-  api(`/api/bots/${id}/translate`).then(r=>$("#tr").classList.toggle("on",r.translate));
+  api(`/api/bots/${id}/token`).then(r=>{S.tokV=r.token;if($("#bid"))$("#bid").value=r.token.split(":")[0]});
+  api(`/api/bots/${id}/translate`).then(r=>$("#tr")&&$("#tr").classList.toggle("on",r.translate));
   const clip=async t=>{try{await navigator.clipboard.writeText(t);toast("Copied")}catch{toast("Copy isn't allowed in this browser")}};
   $("#cb").onclick=()=>clip($("#bid").value);$("#ct").onclick=()=>clip(S.tokV||"");
   $("#et").onclick=()=>{const on=$("#tk").value.startsWith("•");$("#tk").value=on?S.tokV:"•".repeat(30);$("#et").innerHTML=on?I.eyeoff:I.eye};
@@ -754,6 +859,7 @@ function tSettings(){const b=S.bot,B=$("#body"),id=b.id,botId=b.token_hint?"":""
   $("#im").onclick=async()=>{const t=$("#cx").value;if(!t.trim())return toast("Choose a file or paste your commands first.");if($("#rp").checked&&!confirm("Replace ALL existing commands with the imported ones?"))return;
     try{const r=await api(`/api/bots/${id}/import`,"POST",{format:document.querySelector('input[name=if]:checked').value,content:t,replace:$("#rp").checked});toast(`${r.added} added, ${r.updated} updated`);$("#cx").value="";S.cmds=await api(`/api/bots/${id}/commands`)}catch(e){toast(e.message)}}}
 
+window.addEventListener('beforeunload',e=>{if(S.cmds.some(c=>c.draft!==undefined&&c.draft!==c.code)){e.preventDefault();e.returnValue=''}});
 loadBots();
 </script>
 </body>

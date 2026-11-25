@@ -745,6 +745,75 @@ def run_job(p):
             db().execute(f"UPDATE bcjobs SET {sets} WHERE id=? AND bot_id=?", (*cols.values(), jid, BID))
         return {"ok": True}
 
+    nraw_ = lambda t: re.sub(r"\s+", " ", (t or "").strip())
+
+    def _cmd_row(botid, name):
+        rows_ = db().execute("SELECT * FROM commands WHERE bot_id=?", (int(botid),)).fetchall()
+        return next((r for r in rows_ if nraw_(r["name"]) == nraw_(name)), None) or \
+            next((r for r in rows_ if nraw_(r["name"]).lstrip("/").lower() == nraw_(name).lstrip("/").lower()), None)
+
+    def _trash_row(botid, key):
+        for r in db().execute("SELECT * FROM trash_commands WHERE bot_id=? ORDER BY deleted_at DESC", (int(botid),)):
+            if str(r["id"]) == str(key) or nraw_(r["name"]) == nraw_(str(key)):
+                return r
+        return None
+
+    def deleted_commands(botid):
+        return [D({"id": r["id"], "name": r["name"], "deleted_at": r["deleted_at"], "folder": r["folder"],
+                   "lines": (r["code"] or "").count("\n") + 1})
+                for r in db().execute("SELECT * FROM trash_commands WHERE bot_id=? ORDER BY deleted_at DESC", (int(botid),))]
+
+    def delete_command(botid, name):
+        """Move a command to the bot's recycle bin."""
+        r = _cmd_row(botid, name)
+        if not r:
+            return {"ok": False, "error": f"no command named {name!r}"}
+        if not DRY:
+            db().execute("INSERT INTO trash_commands(bot_id,name,code,folder,deleted_at) VALUES(?,?,?,?,?)",
+                         (r["bot_id"], r["name"], r["code"], r["folder"], time.time()))
+            db().execute("DELETE FROM commands WHERE id=?", (r["id"],))
+            _ctl("reindex", int(botid))
+        return {"ok": True, "name": r["name"]}
+
+    def restore_command(botid, key):
+        """Bring a command back from the recycle bin (by name or by the id from getDeletedCommands)."""
+        t = _trash_row(botid, key)
+        if not t:
+            return {"ok": False, "error": f"{key!r} is not in the recycle bin"}
+        have = {nraw_(r["name"]) for r in db().execute("SELECT name FROM commands WHERE bot_id=?", (int(botid),))}
+        name, i = t["name"], 1
+        while nraw_(name) in have:
+            i += 1
+            name = f'{t["name"]} (restored{"" if i == 2 else " " + str(i - 1)})'
+        if not DRY:
+            db().execute("INSERT INTO commands(bot_id,name,code,folder,updated_at) VALUES(?,?,?,?,?)",
+                         (t["bot_id"], name, t["code"], t["folder"], time.time()))
+            db().execute("DELETE FROM trash_commands WHERE id=?", (t["id"],))
+            _ctl("reindex", int(botid))
+        return {"ok": True, "name": name}
+
+    def purge_command(botid, key=None):
+        """Delete one command from the recycle bin for good, or empty the whole bin (key=None)."""
+        if not DRY:
+            if key is None:
+                db().execute("DELETE FROM trash_commands WHERE bot_id=?", (int(botid),))
+            else:
+                t = _trash_row(botid, key)
+                t and db().execute("DELETE FROM trash_commands WHERE id=?", (t["id"],))
+        return {"ok": True}
+
+    def backup_url(kind="all.json"):
+        t = db().execute("SELECT v FROM settings WHERE k='backup_token'").fetchone()
+        if not t:
+            import secrets as _s
+            tok = _s.token_urlsafe(24)
+            db().execute("INSERT OR REPLACE INTO settings(k,v) VALUES('backup_token',?)", (tok,))
+        else:
+            tok = t["v"]
+        return f"{p['base_url'].rstrip('/')}/backup/{tok}/{kind}"
+
+    _dc, _rc_cmd, _pc = delete_command, restore_command, purge_command
+
     class _BotMeta(type):
         def __getattr__(cls, name):          # Bot.replyText(...), Bot.getMe() ... fall through to the bot API
             if name.startswith("_"):
@@ -762,6 +831,10 @@ def run_job(p):
         status = staticmethod(lambda bot_id=None, api_key=None: "working" if (db().execute("SELECT running FROM bots WHERE id=?", (BID,)).fetchone() or {"running": 0})["running"] else "stopped")
         setAutoTranslate = staticmethod(lambda enabled=True: (db().execute("UPDATE bots SET translate=? WHERE id=?", (1 if enabled else 0, BID)), {"ok": True})[1])
         getAutoTranslate = staticmethod(lambda: bool((db().execute("SELECT translate FROM bots WHERE id=?", (BID,)).fetchone() or {"translate": 0})["translate"]))
+        getDeletedCommands = staticmethod(lambda: deleted_commands(BID))
+        deleteCommand = staticmethod(lambda name: delete_command(BID, name))
+        restoreCommand = staticmethod(lambda key: restore_command(BID, key))
+        purgeCommand = staticmethod(lambda key=None: purge_command(BID, key))
         getBroadcastStatus = getBroadcastProgress = staticmethod(_bcs)
         stopBroadcast = staticmethod(lambda jid: _bc_set(jid, status="stopped"))
         pauseBroadcast = staticmethod(lambda jid: _bc_set(jid, status="paused"))
@@ -923,6 +996,20 @@ def run_job(p):
         get_bot_status = staticmethod(lambda botid: "working" if (db().execute("SELECT running FROM bots WHERE id=?", (int(botid),)).fetchone() or {"running": 0})["running"] else "stopped")
         get_bots_list = staticmethod(lambda: [D({"botid": r["id"], "name": r["name"], "username": r["username"], "status": "working" if r["running"] else "stopped"}) for r in db().execute("SELECT id,name,username,running FROM bots")])
         gen_random_id = staticmethod(lambda: uuid.uuid4().hex[:16])
+        # --- recycle bins, addressed by bot id ---
+        delete_bot = staticmethod(lambda botid: _ctl("delete_bot", int(botid)))          # moves the bot to the recycle bin
+        restore_bot = staticmethod(lambda botid: _ctl("restore_bot", int(botid)))
+        purge_bot = staticmethod(lambda botid: _ctl("purge_bot", int(botid)))             # delete for good
+        get_deleted_bots = staticmethod(lambda: [D({"botid": r["id"], "name": r["name"], "username": r["username"],
+                                                     "deleted_at": r["deleted_at"], "commands": r["n_commands"], "users": r["n_users"]})
+                                                  for r in db().execute("SELECT id,name,username,deleted_at,n_commands,n_users FROM trash_bots ORDER BY deleted_at DESC")])
+        get_bot_commands = staticmethod(lambda botid: [r["name"] for r in db().execute("SELECT name FROM commands WHERE bot_id=? ORDER BY name", (int(botid),))])
+        get_deleted_commands = staticmethod(deleted_commands)
+        delete_command = staticmethod(_dc)
+        restore_command = staticmethod(_rc_cmd)
+        purge_command = staticmethod(_pc)
+        get_backup_url = staticmethod(backup_url)
+        send_backup = staticmethod(lambda: _ctl("backup_now"))                               # to the Telegram chat set in More → Backup
 
         def __getattr__(self, name):
             def na(*a, **k):
@@ -1058,8 +1145,9 @@ def serve():
         try:
             res = run_job(json.loads(line))
         except BaseException:
-            res = {"actions": [], "pending": None, "scheduled": [], "stdout": "", "errors": [], "error_line": None,
-                   "error": traceback.format_exc()}
+            tb = traceback.format_exc()
+            res = {"actions": [], "pending": None, "scheduled": [], "stdout": "", "error_line": None, "error": tb,
+                   "errors": [{"command": "(runtime)", "message": tb, "line": None}]}
         proto_out.write(json.dumps(res, default=str) + "\n")
         proto_out.flush()
 
