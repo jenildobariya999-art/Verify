@@ -96,14 +96,6 @@ def add_bot():
         return jsonify(error=f"Telegram rejected this token: {e}"), 400
     bid = core.run("INSERT INTO bots(name, username, token) VALUES(?,?,?)",
                    (me.get("first_name"), me.get("username"), token))
-    core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)",
-             (bid, "/start", core.DEFAULT_START))
-    core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)",
-             (bid, "cb:hello", 'bot.answer("Hello!")\nbot.edit("Hello right back 👋")\n'))
-    core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)",
-             (bid, "cb:ask", 'bot.answer()\nbot.send("What is your name?")\nwait_next("/got_name")\n'))
-    core.run("INSERT INTO commands(bot_id, name, code) VALUES(?,?,?)",
-             (bid, "/got_name", 'user.save("name", text)\nbot.send(f"Nice to meet you, {text}!")\n'))
     core.start_bot(bid)
     return jsonify(bot_view(core.one("SELECT * FROM bots WHERE id=?", (bid,))))
 
@@ -145,7 +137,7 @@ def add_command(bid):
     if _exists(bid, name):
         return jsonify(error=f"{name} already exists."), 400
     cid = core.run("INSERT INTO commands(bot_id, name, code, folder, updated_at) VALUES(?,?,?,?,?)",
-                   (bid, name, request.json.get("code") or "bot.send(\"Hello!\")\n", request.json.get("folder"), time.time()))
+                   (bid, name, request.json.get("code") or "", request.json.get("folder"), time.time()))
     core.invalidate(bid)
     return jsonify(core.one("SELECT * FROM commands WHERE id=?", (cid,)))
 
@@ -172,22 +164,6 @@ def del_command(cid):
     return jsonify(ok=True)
 
 
-@app.post("/api/commands/<int:cid>/duplicate")
-@auth
-def duplicate_command(cid):
-    c = core.one("SELECT * FROM commands WHERE id=?", (cid,))
-    if not c:
-        return jsonify(error="No such command."), 404
-    name, i = f"{c['name']} copy", 1
-    while _exists(c["bot_id"], name):
-        i += 1
-        name = f"{c['name']} copy {i}"
-    nid = core.run("INSERT INTO commands(bot_id, name, code, folder, updated_at) VALUES(?,?,?,?,?)",
-                   (c["bot_id"], name, c["code"], c["folder"], time.time()))
-    core.invalidate(c["bot_id"])
-    return jsonify(core.one("SELECT * FROM commands WHERE id=?", (nid,)))
-
-
 @app.post("/api/commands/<int:cid>/test")
 @auth
 def test_command(cid):
@@ -201,7 +177,7 @@ def test_command(cid):
     msg = {"message_id": 1, "from": user, "chat": chat, "text": text}
     words, n = text.split(), len(cmd["name"].split())
     args = words[n:] if core.nk(" ".join(words[:n])) == core.nk(cmd["name"]) else words
-    is_cb = cmd["name"].startswith("cb:")
+    is_cb = cmd["name"].startswith("cb:") or bool(request.json.get("callback"))
     if is_cb:
         msg = {"id": "test", "from": user, "data": text, "message": msg, "chat": chat, "message_id": 1}
     ctx = core.make_ctx("callback_query" if is_cb else "message", msg, user, chat, text, args,
@@ -350,12 +326,6 @@ def get_translate(bid):
     return jsonify(translate=bool(_bot(bid)["translate"]))
 
 
-@app.post("/api/bots/<int:bid>/transfer")
-@auth
-def transfer(bid):
-    return jsonify(error="Transfers need separate panel accounts, and this panel has a single owner login."), 400
-
-
 @app.post("/api/bots/<int:bid>/clone")
 @auth
 def clone(bid):
@@ -455,7 +425,7 @@ def _count(sql, *args):
 @auth
 def intro(bid):
     b = _bot(bid)
-    return jsonify(name=b["name"], username=b["username"], bot_id=b["token"].split(":")[0],
+    return jsonify(name=b["name"], username=b["username"], bot_id=str(b["id"]),
                    running=core.is_running(bid), uptime=core.uptime(bid), version=b.get("version") or "1.0.0",
                    users=_count("SELECT COUNT(*) c FROM users WHERE bot_id=?", bid),
                    commands=_count("SELECT COUNT(*) c FROM commands WHERE bot_id=?", bid),
@@ -880,6 +850,66 @@ def system():
                    scheduled=core.one("SELECT COUNT(*) c FROM scheduled")["c"])
 
 
+# ---------- error alerts ----------
+def _err_view():
+    cfg = core.err_cfg()
+    st = {}
+    try:
+        st = json.loads(core.get_setting("error_alert_status") or "{}")
+    except Exception:
+        pass
+    return {"send_alert": cfg["send_alert"], "token_set": bool(cfg["alert_token"]), "token_hint": cfg["alert_token"][-4:],
+            "alert_chat": cfg["alert_chat"], "owner_ids": ", ".join(str(x) for x in cfg["owner_ids"]),
+            "show_owner": cfg["show_owner"], "show_user": cfg["show_user"], "user_msg": cfg["user_msg"], "status": st}
+
+
+@app.get("/api/error_alerts")
+@auth
+def err_get():
+    return jsonify(_err_view())
+
+
+@app.put("/api/error_alerts")
+@auth
+def err_put():
+    j, cfg = request.json, core.err_cfg()
+    tok = (j.get("alert_token") or "").strip()
+    if tok:
+        try:
+            me = core.tg(tok, "getMe")
+        except Exception as e:
+            return jsonify(error=f"Telegram rejected that alert bot token: {e}"), 400
+        cfg["alert_token"] = tok
+    if j.get("clear_token"):
+        cfg["alert_token"] = ""
+    chat = str(j.get("alert_chat", "")).strip()
+    if chat and not re.fullmatch(r"-?\d{1,20}|@\w{4,}", chat):
+        return jsonify(error="The alert chat ID is a number like 123456789 (or -100… for a group)."), 400
+    ids = [x for x in re.split(r"[\s,;]+", str(j.get("owner_ids", ""))) if x]
+    if any(not re.fullmatch(r"-?\d{1,20}", x) for x in ids):
+        return jsonify(error="Owner IDs are numbers, separated by commas."), 400
+    cfg.update(send_alert=bool(j.get("send_alert", True)), alert_chat=chat, owner_ids=[int(x) for x in ids],
+               show_owner=bool(j.get("show_owner", True)), show_user=bool(j.get("show_user", True)),
+               user_msg=str(j.get("user_msg", cfg["user_msg"]))[:500])
+    core.set_err_cfg(cfg)
+    return jsonify(_err_view())
+
+
+@app.post("/api/error_alerts/test")
+@auth
+def err_test():
+    cfg = core.err_cfg()
+    if not cfg["alert_token"] or not str(cfg["alert_chat"]).strip():
+        return jsonify(error="Save the alert bot token and the chat ID first."), 400
+    try:
+        core.send_error_alert(cfg, {"id": 0, "username": "test_bot"},
+                              {"command": "/test", "line": 47, "message": "This is a test alert from Botbench.",
+                               "short": "Syntax Error: expected 'except' or 'finally' block (<unknown>, line 47)"}, {"id": 1, "username": "tester"})
+    except Exception as e:
+        return jsonify(error=f"Couldn't send the alert: {e}"), 400
+    return jsonify(ok=True)
+
+
 # ---------- mini app ----------
 MINI_DEFAULT = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -936,10 +966,11 @@ def webhook(bid):
     if body is None:
         body = dict(request.form) or dict(request.args)
     keep = ("user-agent", "origin", "referer", "x-forwarded-for", "content-type", "accept-language")
-    core.fire_hook(bot, c, int(u), {"json": body, "params": dict(request.args), "query": dict(request.args),
+    res = core.fire_hook(bot, c, int(u), {"json": body, "params": dict(request.args), "query": dict(request.args),
                                     "method": request.method, "ip": (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip(),
                                     "headers": {k: v for k, v in request.headers.items() if k.lower() in keep}})
-    return jsonify(ok=True), 200, cors
+    out = (res or {}).get("webhook_result")
+    return jsonify(out if out is not None else {"ok": True}), 200, cors
 
 
 @app.get("/m/<int:bid>")

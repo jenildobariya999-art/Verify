@@ -93,6 +93,7 @@ nav button.on svg{background:#8b5cf633;border-radius:8px;padding:3px;width:30px;
 .tb.w{width:auto;padding:0 14px;display:flex;gap:8px;font-size:14.5px;align-items:center}
 .tb:disabled{opacity:.45}.sep{width:1px;height:30px;background:#34343a;margin:0 6px}
 .ed{position:relative;margin:0 -14px;background:#000;min-height:62vh;counter-reset:l}
+.ed textarea::placeholder{color:#5b5b66}
 .hl,.ed textarea{margin:0;padding:12px 14px 80px 52px;font:14.5px/1.6 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;tab-size:4;border:0;width:100%}
 .hl{position:absolute;inset:0;pointer-events:none;color:#e8e8ee}
 .hl div{position:relative;min-height:1.6em}
@@ -169,6 +170,8 @@ details.doc[open]>summary::after{transform:rotate(-135deg);margin-top:3px}detail
 .binbtn{position:relative}.binbtn i{position:absolute;top:1px;right:0;min-width:17px;height:17px;border-radius:9px;background:var(--pri);color:#fff;font:600 11px/17px var(--mono);text-align:center;font-style:normal}
 .lkrow{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--line)}.lkrow:first-child{border-top:0}.lkurl{font-size:11.5px;color:#9ca3af;word-break:break-all;margin-top:2px}
 .errb{flex:none}.card select,.field select{font:inherit}
+.btn:disabled{opacity:.38;cursor:default;filter:saturate(.35)}.btn.dirty:not(:disabled){box-shadow:0 0 0 2px #a78bfa77,0 8px 20px -10px #8b5cf6}
+.tb.w.dirty{box-shadow:0 0 0 2px #a78bfa77}
 @media(max-width:480px){.erow{grid-template-columns:1fr 1fr}.snip{max-width:48vw}}
 @media(min-width:900px){
   :root{--pad:34px}
@@ -220,6 +223,10 @@ function render(){({home:vHome,bots:vBots,ai:vAI,more:vMore}[S.page])()}
 function vAI(){frame(`<h2 class="page">AI</h2><div class="card"><h4>AI assistant</h4><p>Describe a command in plain words and get Python code for it. This needs an AI provider key, which isn't connected to this panel yet.</p><div class="field"><input disabled placeholder="e.g. a /balance command that reads user data"></div></div>`)}
 
 const when=t=>{const d=new Date(t*1e3),n=new Date(),hm=d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",hour12:false});const k=Math.round((new Date(n.getFullYear(),n.getMonth(),n.getDate())-new Date(d.getFullYear(),d.getMonth(),d.getDate()))/864e5);return k==0?`Today at ${hm}`:k==1?`Yesterday at ${hm}`:`${d.toLocaleDateString(undefined,{day:"numeric",month:"short"})} at ${hm}`};
+function trackDirty(btn,getter,root){let base=JSON.stringify(getter());
+  const upd=()=>{const d=JSON.stringify(getter())!==base;btn.disabled=!d;btn.classList.toggle("dirty",d)};
+  btn.disabled=true;btn.classList.remove("dirty");(root||document.body).addEventListener("input",upd);(root||document.body).addEventListener("change",upd);
+  return{reset(){base=JSON.stringify(getter());upd()},update:upd}}
 const alive=el=>!!el&&document.body.contains(el);
 const hms=s=>[s/3600|0,s/60%60|0,s%60].map(x=>String(x).padStart(2,"0")).join(":");
 const importUsersCard=()=>`<div class="card"><h4>Import users</h4><p>JSON, CSV or TXT with Telegram user IDs: our export or another platform's. Every ID is checked with Telegram through this bot and only users it can reach are added, about 10 a second, so a big list takes hours. You can leave this page.</p><div class="file"><label class="btn">Choose file<input type="file" id="uf" accept=".json,.csv,.txt"></label><span id="un2">No file chosen</span></div></div>`;
@@ -356,16 +363,59 @@ bot.send("Hello boss")</pre><h4>Friendly error message (the <code>!</code> comma
 ];
 /* API reference: [category, name, signature, description, example, extra search words]. [[x]] shows as code. */
 const REF=[
-["Account","Account.delete_bot / restore_bot / purge_bot / get_deleted_bots","Account.delete_bot(botid)   Account.restore_bot(botid)   Account.purge_bot(botid)   Account.get_deleted_bots()","Recycle bin for bots, addressed by bot ID. [[delete_bot]] stops a bot and moves it (commands, data, users, token) to the bin; [[restore_bot]] brings it back with the same ID; [[purge_bot]] deletes it for good. Bins keep items for 30 days (TRASH_DAYS). The change happens within a second.",
+["Account","Account.get_bots_list / get_bot_info / get_bot_status","Account.get_bots_list()   Account.get_bot_info(botid)   Account.get_bot_status(botid)","The bots of this panel, by bot ID (the number shown in Settings → Bot ID and in [[bot_id]]). Answers look like Telebot Creator's: [[{\"ok\": True, \"result\": …}]]. [[get_bots_list]] gives botid, name, username, status, creation_date, has_token; [[get_bot_info]] adds command_count and user_count; [[get_bot_status]] gives {\"status\": \"working\" or \"stopped\"}. creation_date looks like 14:05:09 27:11:2026 (UTC).",
+`# command: /bots
+r = Account.get_bots_list()
+for b in r["result"]:
+    bot.sendMessage(f"{b['botid']} @{b['username']} {b['status']} since {b['creation_date']}")
+info = Account.get_bot_info(bot_id)["result"]
+print(info["user_count"], info["command_count"])`,"accounts account list bots status info creation date users commands bot id"],
+["Account","Account.start_bot / stop_bot / restart_bot","Account.start_bot(botid)   Account.stop_bot(botid)   Account.restart_bot(botid)","Start, stop or restart a bot of this panel. The call waits until it is done and returns {\"ok\": True, \"result\": \"Bot started successfully\"} (or ok False with the reason).",
+`# command: /restart-me
+r = Account.restart_bot(bot_id)
+bot.sendMessage(str(r["result"]))`,"accounts account control manage on off"],
+["Account","Account.clone_bot / create_bot / import_bot","Account.clone_bot(botid, new_token)   Account.create_bot(bot_token)   Account.import_bot(import_data, new_token)","Make a new bot in this panel for the bot token you give (it is checked with Telegram first, and a token already in the panel is refused). [[clone_bot]] copies every command, folder and variable of the template bot; the new bot starts at once and the answer has its [[botid]]. This is how a bot can create bots for your customers.",
+`# command: /make
+r = Account.clone_bot(12345678, params)       # template bot ID, token the user sent
+if r["ok"]:
+    bot.sendMessage("Your bot is ready: " + str(r["botid"]))
+else:
+    bot.sendMessage("Could not create it: " + str(r["result"]))`,"accounts clone copy template create bot customer maker factory"],
+["Account","Account.export_bot / parse_import_data / import_commands","Account.export_bot(botid, format=\"json\", include_bot_data=False)   Account.parse_import_data(file)   Account.import_commands(data, botid, remove_old_command=False)","Move commands between bots. [[export_bot]] returns a file (send it with sendDocument or read it); [[parse_import_data]] reads such a file into {\"commands\": [{\"command\", \"code\"}]}; [[import_commands]] writes them into a bot. With [[remove_old_command=True]] the old commands go to that bot's recycle bin first.",
+`# command: /theme
+f = Account.export_bot(12345678)                # the template
+data = Account.parse_import_data(f.read())
+r = Account.import_commands(data, str(bot_id), remove_old_command=False)
+bot.sendMessage(str(r["result"]))`,"accounts export import theme template commands copy file"],
+["Account","Account.delete_bot / recover_bot / get_deleted_bots","Account.delete_bot(botid, permanent=False)   Account.recover_bot(botid, new_token=None)   Account.get_deleted_bots()   Account.permanent_delete_bot(botid)","Recycle bin for bots, by bot ID. [[delete_bot]] stops a bot and moves it (commands, data, users, token) to the bin; [[recover_bot]] brings it back with the same ID (or with [[new_token]]); [[permanent_delete_bot]] removes it for good. [[get_deleted_bots]] lists botid, name, username, deleted_at, commands_count, days_remaining, recoverable. Kept 30 days (TRASH_DAYS).",
 `# command: /bin
-for b in Account.get_deleted_bots():
-    bot.sendMessage(f"{b.botid} @{b.username}: {b.commands} commands, {b.users} users")
-Account.restore_bot(12345678)      # use the bot ID from the list`,"recycle bin trash deleted restore undo remove accounts bot id"],
-["Account","Account.get_bot_commands / delete_command / restore_command / get_deleted_commands","Account.delete_command(botid, name)   Account.restore_command(botid, name_or_id)   Account.get_deleted_commands(botid)   Account.purge_command(botid, name_or_id=None)","The command recycle bin of any bot in this panel, by bot ID. [[delete_command]] moves a command to that bot's bin, [[restore_command]] brings it back (a name clash becomes “name (restored)”), [[purge_command]] removes one item for good or empties the bin when called without a name.",
-`# command: /undo
-for d in Account.get_deleted_commands(bot_id):
-    bot.sendMessage(f"{d.id}: {d.name} ({d.lines} lines)")
-print(Account.restore_command(bot_id, "/promo"))`,"recycle bin trash deleted command restore undo accounts bot id"],
+for b in Account.get_deleted_bots()["result"]:
+    bot.sendMessage(f"{b['botid']} @{b['username']}: {b['days_remaining']} days left")
+r = Account.recover_bot(12345678)
+bot.sendMessage(str(r["result"]))`,"recycle bin trash deleted restore undo remove accounts bot id recover"],
+["Account","Account.get_command_list / create_command / edit_command / delete_command","Account.get_command_list(botid)   Account.get_command_info(botid, command)   Account.create_command(botid, command, code)   Account.edit_command(botid, command, code)   Account.delete_command(botid, command)","Work with the commands of any bot by bot ID. [[get_command_list]] gives [[{\"command\", \"code_length\", \"has_code\"}]] per command. [[delete_command]] moves a command to that bot's recycle bin; [[restore_command(botid, name_or_id)]], [[get_deleted_commands(botid)]] and [[purge_command(botid, name_or_id)]] manage the bin.",
+`# command: /cmds
+r = Account.get_command_list(bot_id)
+bot.sendMessage(", ".join(c["command"] for c in r["result"]))
+Account.create_command(bot_id, "/hello", "bot.sendMessage('Hello!')")`,"accounts commands list create edit delete recycle bin restore"],
+["Account","Another bot's data: bot_id=","Bot.getData(name, bot_id=…)   User.saveData(name, data, user=…, bot_id=…)   libs.Resources.anotherRes(name, user=…, bot_id=…)   Account.get_bot_data(botid, name)","Every bot in the panel can read and write the data of another bot by its bot ID. [[api_key=]] is accepted and ignored. An unknown bot ID raises an error. Also: [[libs.Resources.accountRes(name)]] is a counter shared by all bots, and [[Account.saveData]] / [[getData]] store account-wide values.",
+`# command: /sync
+mine = Bot.getData("Owner")
+Bot.saveData("Owner", mine, bot_id=87654321)           # copy to another bot
+libs.Resources.anotherRes("Balance", user=u, bot_id=87654321).add(5)`,"accounts cross bot other bot data share admin manage"],
+["Account","Replacing a revoked bot token","HTTP.post(\"https://api.telebotcreator.com/v2/mcp/build\", …) tool replace_bot_tokens","Commands written for Telebot Creator that call its MCP endpoint with the tool [[replace_bot_tokens]] work here: the panel answers itself. It finds the bot with the same Telegram ID, saves the new token and restarts it if it was running. Other Telebot Creator tools are refused with a clear message.","","accounts token revoke replace botfather mcp new token"],
+["Broadcast","Bot.broadcast","Bot.broadcast(function=\"sendMessage\", callback_url=None, bot_id=None, mode=None, speed=None, code=None, **params)","Sends one Telegram call to every user who has not blocked the bot (about 20 per second) and returns {\"status\", \"broadcast_id\"} (it also works as a name or key). [[function]] is a Telegram method (snake_case or camelCase); [[params]] are its arguments. [[code=\"…\"]] runs that code once for each user instead. [[bot_id=]] broadcasts to the users of another bot of the panel, [[bot_ids=[…]]] or [[mode=\"all\"]] to several. [[callback_url]] runs when it is done, in the bot that started it.",
+`# command: /announce
+task = Bot.broadcast(
+    function="sendMessage",
+    text="<b>Update!</b> New offers today",
+    callback_url=libs.Webhook.getUrlFor("/BroadcastDone", u),
+)
+User.saveData("last_broadcast", task["broadcast_id"])`,"send all users announcement mass message newsletter other bot multi code"],
+["Webhook","Api.setWebhookResult","Api.setWebhookResult(obj)","In a command started by a webhook link, the object you pass becomes the HTTP answer (JSON), so a web page or another server can read it. Without it the answer is {\"ok\": true}.",
+`# command: /page-data
+Api.setWebhookResult({"ok": True, "balance": libs.Resources.anotherRes("Balance").value(), "user": u})`,"api page response answer json http"],
+["Panel","Error messages and alerts","More → Error alerts","When a command fails (a syntax error, a crash, a Telegram error), the person who ran it is told: the owner IDs see the real message inside the bot, like [[Botbench Error: Syntax Error: expected 'except' or 'finally' block (<unknown>, line 47)]], everyone else sees your friendly line (default: There is some error. Please contact @Jenish_Dobariya1). A dedicated alert bot also gets every error of every bot, with the bot, command, line and user, so you can fix it. The same error is sent at most every 5 minutes. If your bot has its own [[!]] command, it answers the user instead.","","error alert notify syntax traceback owner contact developer dedicated bot token chat id debug"],
 ["Account","Account.get_backup_url / send_backup","Account.get_backup_url(\"all.json\")   Account.send_backup()","[[get_backup_url]] returns your private backup link (kinds: all.json, commands.json, users.csv, users.json, commands.zip, panel.db). [[send_backup]] sends a backup file to the Telegram chat set in More → Auto-backup.",
 `# command: /backup
 bot.sendMessage("Backup link:\\n" + Account.get_backup_url("all.json"), parse_mode=None)
@@ -379,7 +429,7 @@ print(Bot.restoreCommand("/old-promo"))`,"recycle bin trash undo"],
 ["Panel","Auto-backup to Telegram","More → Auto-backup to Telegram","Free off-site backup: choose a bot, your Telegram ID and how often; the panel sends a compressed backup file (.json.gz) to your chat. Over 50 MB it sends commands only. After a fresh deploy or on a host that wipes its disk, download the latest file and use More → Restore.","","backup telegram schedule automatic cloud free render wipe persistent"],
 ["Panel","RESTORE_URL (restore on a fresh deploy)","RESTORE_URL=https://…/backup/…/all.json","Set this environment variable and the panel loads that backup when it starts with an empty database, for example after a free Render deploy wiped its disk. Point it at the all.json link of a panel that is still running, or at any web address that serves a backup file.","","render environment fresh start empty database restore automatically persistent"],
 ["Panel","Recycle bin (bots and commands)","Commands → bin icon · Bots → Recycle bin · More → Recycle bin","Deleting a command or a bot moves it to a bin for 30 days. Restore brings it back (bots return with the same ID, token and data). Replacing commands by Import or Restore also puts the old ones in the bin.","","trash deleted undo restore recover"],
-["Panel","Unsaved changes, drafts, duplicate and sort","editor Save button · Commands list","The Save button and the editor toolbar stay at the top while you scroll, and turn purple when there are unsaved changes. Your text is also kept in this browser, so a refresh or a closed tab gives it back. Duplicate copies a command; the clock button sorts by recently edited.","","save sticky draft autosave duplicate copy sort recent"],
+["Panel","Unsaved changes, drafts and sort","editor Save button · Commands list","The Save button and the editor toolbar stay at the top while you scroll. Save is faded until something changed, and solid purple when there are unsaved changes: no change means nothing to save. Your text is also kept in this browser, so a refresh or a closed tab gives it back. The clock button sorts commands by recently edited.","","save sticky draft autosave sort recent"],
 ["Webhook","libs.Webhook.getUrlFor","libs.Webhook.getUrlFor(command, user_id=u)","Returns a signed link to this panel. When anything calls it (a browser, a payment gateway, another server; GET or POST), [[command]] runs for [[user_id]] and receives the request as [[options]]. It needs a public HTTPS address ([[PUBLIC_URL]]). A link that was changed or made for another command or user is rejected.",
 `# command: /Verify
 webhook = libs.Webhook.getUrlFor(
@@ -422,14 +472,6 @@ if str(d.get("status")).lower() == "success":
 `# command: /acc-demo
 Account.saveData("support_chat", "@mysupport")
 bot.sendMessage("Support: " + str(Account.getData("support_chat")))`,"accounts account data panel global shared"],
-["Account","Account.start_bot / stop_bot / restart_bot","Account.start_bot(botid)   Account.stop_bot(botid)   Account.restart_bot(botid)","Start, stop or restart a bot of this panel from a command. The current bot's ID is [[bot_id]]. A stop takes effect within a second. Only bots in this panel can be controlled.",
-`# command: /restart-me
-bot.sendMessage("Restarting…")
-Account.restart_bot(bot_id)`,"accounts account control manage"],
-["Account","Account.get_bots_list / get_bot_status","Account.get_bots_list()   Account.get_bot_status(botid)","List the bots in this panel (botid, name, username, status) or ask if one is \"working\" or \"stopped\".",
-`# command: /bots
-for b in Account.get_bots_list():
-    bot.sendMessage(f"{b.name} @{b.username}: {b.status}")`,"accounts account list status"],
 ["Account","Bot.info()","Bot.info()   bot.info()   bot.getMe()","Facts about this bot: [[bot_id]], [[name]], [[username]], [[token]], [[status]]. Works without arguments only; reading another bot's info needs Telebot Creator.",
 `# command: /about
 i = Bot.info()
@@ -449,7 +491,7 @@ b.add(10)
 bot.sendMessage("Balance: " + str(b.value()))`,"accounts account balance wallet points money coins"],
 ["Account","Panel login and password","PANEL_PASSWORD","The panel has one login. Its password is the [[PANEL_PASSWORD]] setting (Render: Environment; VPS: /etc/botbench.env). Change it there and restart. Anyone with the password can run code, so keep it private and use a long one.","","accounts login sign in password security admin panel"],
 ["Account","Bot token and updating it","bot_token   Settings → Update token","The token of the current bot is in [[bot_token]]. To replace it (after revoking in @BotFather) use Settings → Update token; it must belong to the same bot. Keep tokens out of commands: put them in Manage → Environment variables.","","accounts token botfather revoke secret"],
-["Account","Clone, export, transfer","Settings → Clone bot / Export bot","Clone copies all commands and data to another bot token. Export gives JSON, YAML or TXT. Transferring a bot to another account is not available because the panel has a single owner.","","accounts clone copy move transfer ownership"],
+["Account","Clone and export","Settings → Clone bot / Export bot","Clone copies all commands and data to another bot token. Export gives JSON, YAML or TXT.","","accounts clone copy move"],
 ["Account","Not available: Telebot Creator account functions","Account.get_bot_data, Account.set_bot_data, Bot.info(bot_id=…, api_key=…) …","Functions that talk to the Telebot Creator platform (other accounts, API keys, other bots' data, ads, crypto libraries) raise a clear error here. Use Account.saveData for shared data and Backup/Restore to move data.","","accounts unsupported error tbc telebot creator api_key"],
 
 ["Data","Bot.getData / saveData / deleteData","Bot.saveData(name, data)   Bot.getData(name)   Bot.deleteData(name)   Bot.setData(name, data)","Data shared by the whole bot. [[getData]] returns None when missing. Anything JSON-friendly works: numbers, text, lists, dicts, True/False. Edit it in Admin → Bot Data.",
@@ -519,14 +561,6 @@ if Bot.getData(f"{u}ban"):
 bot.approveChatJoinRequest(message.chat.id, message.from_user.id)`,"join request channel member left kicked blocked inline query poll"],
 ["Special","Variables in every command","u  message  call  msg  params  args  options  update_type  bot_id  bot_token","[[u]] the user's ID, [[message]] the Telegram message (for buttons the callback), [[msg]] the text, [[params]]/[[args]] the words after the command, [[options]] values from webhook, runCommand, handleNextCommand or schedules, [[update_type]] the kind of update. Manage → Environment variables are also globals.","","scope globals user id text"],
 
-["Broadcast","Bot.broadcast","Bot.broadcast(function=\"sendMessage\", callback_url=None, **params)","Sends one Telegram call to every user who has not blocked the bot (about 20 per second) and returns [[{\"broadcast_id\": …}]]. [[function]] is a Telegram method name; [[params]] are its arguments (chat_id is filled in for each user).",
-`# command: /announce
-task = Bot.broadcast(
-    function="sendMessage",
-    text="<b>Update!</b> New offers today",
-    callback_url=libs.Webhook.getUrlFor("/BroadcastDone", u),
-)
-User.saveData("last_broadcast", task["broadcast_id"])`,"send all users announcement mass message newsletter"],
 ["Broadcast","Bot.getBroadcastStatus and controls","Bot.getBroadcastStatus(id)   stopBroadcast   pauseBroadcast   resumeBroadcast   setBroadcastSpeed(id, per_second)   rerunBroadcast   listBroadcasts()","Status has [[status]] (queued, running, paused, stopped, completed), [[total_users]], [[total_success]], [[total_errors]] and [[progress]]. The panel's Admin → Broadcasts also lists messages sent from there.",
 `# command: /bc-status
 s = Bot.getBroadcastStatus(User.getData("last_broadcast"))
@@ -645,7 +679,7 @@ function drawCommands(){const B=$("#body"),q=S.q.toLowerCase();
   L=S.sort=="recent"?[...L].sort((a,b)=>(b.updated_at||0)-(a.updated_at||0)):[...L].sort((a,b)=>a.name.localeCompare(b.name));
   B.innerHTML=`<div class="card tools"><div class="field">${I.search}<input id="q" placeholder="Search" value="${esc(S.q)}"></div><button class="sq ${S.sort=="recent"?"on":""}" id="so" title="${S.sort=="recent"?"Sorted by recently edited":"Sorted A to Z"}" aria-label="Sort order">${I.clock}</button><button class="sq ${S.snip?"on":""}" id="sn" title="Show code preview" aria-label="Show code preview">${I.code}</button><button class="sq ${S.selMode?"on":""}" id="sm" title="Select" aria-label="Select commands">${I.check}</button>${S.selMode?`<button class="sq" id="dl" title="Delete selected" aria-label="Delete selected" ${S.sel.size?"":"disabled"}>${I.trash}</button>`:""}<button class="sq binbtn" id="bn" title="Recycle bin" aria-label="Recycle bin">${I.bin}${S.trashN?`<i>${S.trashN}</i>`:""}</button><button class="btn sm sqb" id="nc" aria-label="New command">${I.plus}</button></div>
   ${S.selMode&&S.sel.size?`<div class="card tools"><span class="grow">${S.sel.size} selected</span><select id="mv" aria-label="Move to folder"><option value="">Move to…</option><option value="__none">No folder</option>${S.folders.map(f=>`<option>${esc(f)}</option>`).join("")}</select></div>`:""}
-  <div class="clist">${L.map(c=>`<div class="crow" data-id="${c.id}">${S.selMode?`<input type="checkbox" class="cb" ${S.sel.has(c.id)?"checked":""} aria-label="Select ${esc(c.name)}">`:`<span class="ci">${I.code}</span>`}<div class="grow"><span class="cn">${esc(c.name)}</span>${S.sort=="recent"&&c.updated_at?`<div class="snip">edited ${ago(c.updated_at)}</div>`:""}${S.snip?`<div class="snip">${esc(c.code.trim().split("\n").slice(0,2).join("  ⏎  ").slice(0,90))}</div>`:""}</div><button class="ic" data-e="${c.id}" aria-label="Edit ${esc(c.name)}">${I.edit}</button><button class="ic" data-p="${c.id}" aria-label="Duplicate ${esc(c.name)}">${I.dup}</button><button class="ic rd" data-d="${c.id}" aria-label="Move ${esc(c.name)} to the recycle bin">${I.trash}</button></div>`).join("")||'<div class="empty">No commands here yet.</div>'}</div>
+  <div class="clist">${L.map(c=>`<div class="crow" data-id="${c.id}">${S.selMode?`<input type="checkbox" class="cb" ${S.sel.has(c.id)?"checked":""} aria-label="Select ${esc(c.name)}">`:`<span class="ci">${I.code}</span>`}<div class="grow"><span class="cn">${esc(c.name)}</span>${S.sort=="recent"&&c.updated_at?`<div class="snip">edited ${ago(c.updated_at)}</div>`:""}${S.snip?`<div class="snip">${esc(c.code.trim().split("\n").slice(0,2).join("  ⏎  ").slice(0,90))}</div>`:""}</div><button class="ic" data-e="${c.id}" aria-label="Edit ${esc(c.name)}">${I.edit}</button><button class="ic rd" data-d="${c.id}" aria-label="Move ${esc(c.name)} to the recycle bin">${I.trash}</button></div>`).join("")||'<div class="empty">No commands here yet.</div>'}</div>
   <div class="fbar"><button class="ar" id="fl" aria-label="Scroll folders left">${I.back}</button><div class="fpills" id="fp"><button class="fp ${S.folder==null?"on":""}" data-f="">${I.folder}All <span class="n">${S.cmds.length}</span></button>${S.folders.map(f=>`<button class="fp ${S.folder===f?"on":""}" data-f="${esc(f)}">${esc(f)} <span class="n">${S.cmds.filter(c=>c.folder===f).length}</span></button>`).join("")}</div><button class="ar" id="fr" aria-label="Scroll folders right">${I.chev}</button><button class="gear" id="fg" aria-label="Manage folders">${I.gear}</button></div>`;
   const id=S.bot.id,reload=async()=>{S.cmds=await api(`/api/bots/${id}/commands`);S.folders=await api(`/api/bots/${id}/folders`);S.trashN=(await api(`/api/bots/${id}/trash`)).length;S.sel.clear();drawCommands()};
   $("#q").oninput=e=>{S.q=e.target.value;drawCommands();const i=$("#q");i.focus();i.setSelectionRange(S.q.length,S.q.length)};
@@ -653,9 +687,8 @@ function drawCommands(){const B=$("#body"),q=S.q.toLowerCase();
   $("#sn").onclick=()=>{S.snip=!S.snip;drawCommands()};$("#sm").onclick=()=>{S.selMode=!S.selMode;S.sel.clear();drawCommands()};$("#nc").onclick=newCmd;$("#bn").onclick=cmdBinSheet;
   $("#dl")&&($("#dl").onclick=async()=>{if(!S.sel.size||!confirm(`Move ${S.sel.size} command(s) to the recycle bin? You can restore them for ${S.trashDays} days.`))return;await api(`/api/bots/${id}/commands/bulk`,"POST",{ids:[...S.sel],action:"delete"});S.open=S.open.filter(i=>!S.sel.has(i));toast("Moved to the recycle bin");await reload()});
   $("#mv")&&($("#mv").onchange=async e=>{if(!e.target.value)return;await api(`/api/bots/${id}/commands/bulk`,"POST",{ids:[...S.sel],action:"move",folder:e.target.value=="__none"?null:e.target.value});toast("Moved");await reload()});
-  document.querySelectorAll(".crow").forEach(r=>r.onclick=e=>{const cid=+r.dataset.id;if(e.target.closest("[data-e],[data-d],[data-p]"))return;if(S.selMode){S.sel.has(cid)?S.sel.delete(cid):S.sel.add(cid);drawCommands()}else openCmd(cid)});
+  document.querySelectorAll(".crow").forEach(r=>r.onclick=e=>{const cid=+r.dataset.id;if(e.target.closest("[data-e],[data-d]"))return;if(S.selMode){S.sel.has(cid)?S.sel.delete(cid):S.sel.add(cid);drawCommands()}else openCmd(cid)});
   document.querySelectorAll("[data-e]").forEach(b=>b.onclick=()=>openCmd(+b.dataset.e));
-  document.querySelectorAll("[data-p]").forEach(b=>b.onclick=async()=>{try{const n=await api(`/api/commands/${b.dataset.p}/duplicate`,"POST");toast(`Duplicated as ${n.name}`);await reload()}catch(e){toast(e.message)}});
   document.querySelectorAll("[data-d]").forEach(b=>b.onclick=async()=>{const c=S.cmds.find(x=>x.id==b.dataset.d);if(!confirm(`Move ${c.name} to the recycle bin? You can restore it for ${S.trashDays} days.`))return;await api(`/api/commands/${c.id}`,"DELETE");S.open=S.open.filter(i=>i!=c.id);toast("Moved to the recycle bin");await reload()});
   document.querySelectorAll(".fp").forEach(b=>b.onclick=()=>{S.folder=b.dataset.f||null;drawCommands()});
   $("#fl").onclick=()=>$("#fp").scrollBy({left:-160,behavior:"smooth"});$("#fr").onclick=()=>$("#fp").scrollBy({left:160,behavior:"smooth"});
@@ -672,7 +705,8 @@ async function cmdBinSheet(){const id=S.bot.id,el=document.createElement("div");
 /* ---------- Mini App (Save stays visible) ---------- */
 async function tMiniApp(){const B=$("#body"),id=S.bot.id,m=await api(`/api/bots/${id}/miniapp`);if(!alive(B))return;
   B.innerHTML=`<div class="card"><h4>Mini app</h4><div class="act stickybar" style="flex-wrap:wrap"><button class="btn sm" id="ms">${I.save} Save</button><a class="btn ghost sm" href="/m/${id}" target="_blank" rel="noopener" style="text-decoration:none">${I.eye} Preview</a><button class="btn ghost sm" id="mb">Set as menu button</button></div><p style="margin-top:10px">Write the web page that opens inside Telegram. It's served at <span class="mono" style="word-break:break-all">${esc(m.url)}</span></p><textarea class="minitext" id="mh" spellcheck="false" aria-label="Mini app HTML">${esc(m.html)}</textarea></div>`;
-  $("#ms").onclick=async()=>{await api(`/api/bots/${id}/miniapp`,"PUT",{html:$("#mh").value});toast("Saved")};
+  const td=trackDirty($("#ms"),()=>$("#mh").value,B);
+  $("#ms").onclick=async()=>{await api(`/api/bots/${id}/miniapp`,"PUT",{html:$("#mh").value});td.reset();toast("Saved")};
   $("#mb").onclick=async()=>{const t=await ask("Menu button","Text on the button next to the message box in your bot (16 characters max). Telegram needs this site to be on HTTPS.","Open","Set button","Open");if(!t)return;try{await api(`/api/bots/${id}/miniapp`,"PUT",{html:$("#mh").value});await api(`/api/bots/${id}/miniapp/menu`,"POST",{text:t});toast("Menu button set")}catch(e){toast(e.message)}}}
 
 /* ---------- More ---------- */
@@ -686,6 +720,7 @@ function vMore(){
   <button class="list-item" id="mBin">${I.bin}<span class="grow"><b>Recycle bin</b><small id="binInfo">Deleted bots can be restored</small></span>${I.chev}</button>
   <div class="card"><h4>Database link</h4><p>A private link that gives you a backup, no extra database needed. Open it in a browser to download, or paste it into <b>Restore from a link</b> on another panel to move everything. Anyone who has the link can download your data, so keep it private.</p><div id="lk" class="mut">Loading…</div><div class="act" style="margin-top:12px"><button class="btn ghost sm" id="lkr">Make a new link</button></div></div>
   <div class="card"><h4>Auto-backup to Telegram</h4><p>Free and off-site: the panel sends a backup file to your Telegram chat on a schedule. Keep those files: after a fresh install use <b>Restore</b> with one of them.</p><div id="ab"><span class="mut">Loading…</span></div></div>
+  <div class="card"><h4>Error alerts</h4><p>When a command fails, the person who ran it is told. Owners see the real error inside the bot; everyone else sees your friendly line. Every error of every bot is also sent to a dedicated alert bot, so you can fix it.</p><div id="ea"><span class="mut">Loading…</span></div></div>
   <div class="card"><h4>Download a backup</h4><div class="rows" style="padding:0">
     ${dl("/api/backup/all?data=1","All bots with data","Commands, folders, variables, bot data, user data and users (JSON)")}
     ${dl("/api/backup/all?data=0","All bots, commands only","Commands, folders, variables and mini apps (JSON)")}
@@ -718,8 +753,23 @@ function vMore(){
     <div class="act" style="flex-wrap:wrap"><button class="btn sm" id="as">Save</button><button class="btn ghost sm" id="an">Send a backup now</button></div>
     <p class="mut" style="font-size:13px;margin:10px 0 0" id="ast">${a.last_ts?`Last backup ${ago(a.last_ts)}: ${esc(a.last_status)}`:"No backup sent yet."} Message the chosen bot once first so it is allowed to write to you. Get your ID from @userinfobot.</p>`;
     const val=()=>({enabled:$("#ae").checked,bot_id:+$("#abot").value||null,chat_id:$("#achat").value,every_hours:+$("#aev").value,with_data:$("#ad").checked});
-    $("#as").onclick=async()=>{try{await api("/api/backup/auto","PUT",val());toast("Saved")}catch(e){toast(e.message)}};
+    const ta2=trackDirty($("#as"),val,$("#ab"));
+    $("#as").onclick=async()=>{try{await api("/api/backup/auto","PUT",val());ta2.reset();toast("Saved")}catch(e){toast(e.message)}};
     $("#an").onclick=async()=>{try{await api("/api/backup/auto","PUT",{...val(),enabled:$("#ae").checked});$("#ast").textContent="Sending…";const r=await api("/api/backup/auto/run","POST");$("#ast").textContent=`Last backup just now: ${r.last_status}`;toast("Backup sent to Telegram")}catch(e){$("#ast").textContent=e.message;toast(e.message)}}});
+  api("/api/error_alerts").then(e=>{if(!$("#ea"))return;
+    $("#ea").innerHTML=`<label class="chk"><input type="checkbox" id="ea_on" ${e.send_alert?"checked":""}>Send every error to my alert bot</label>
+    <div class="field mono" style="margin-bottom:10px"><input id="ea_tok" type="password" autocomplete="off" placeholder="${e.token_set?`Alert bot token saved (…${esc(e.token_hint)}). Paste a new one to change`:"Token of your alert bot (from @BotFather)"}"></div>
+    <div class="field mono" style="margin-bottom:10px"><input id="ea_chat" inputmode="numeric" placeholder="Chat ID that receives alerts, e.g. 123456789" value="${esc(e.alert_chat||"")}"></div>
+    <div class="field mono" style="margin-bottom:10px"><input id="ea_own" placeholder="Owner Telegram IDs (see full errors in the bot), comma separated" value="${esc(e.owner_ids||"")}"></div>
+    <label class="chk"><input type="checkbox" id="ea_so" ${e.show_owner?"checked":""}>Show the real error to owners inside the bot</label>
+    <label class="chk"><input type="checkbox" id="ea_su" ${e.show_user?"checked":""}>Tell other users that something went wrong</label>
+    <div class="field" style="margin-bottom:10px"><input id="ea_msg" maxlength="500" placeholder="Message for users" value="${esc(e.user_msg||"")}"></div>
+    <div class="act" style="flex-wrap:wrap"><button class="btn sm" id="ea_save">Save</button><button class="btn ghost sm" id="ea_test">Send a test alert</button></div>
+    <p class="mut" style="font-size:13px;margin:10px 0 0" id="ea_st">${e.status&&e.status.ts?(e.status.ok?`Last alert sent ${ago(e.status.ts)}.`:`Last alert failed ${ago(e.status.ts)}: ${esc(e.status.msg||"")}`):"No alert sent yet."} The chat must have started your alert bot first. Owner IDs and the alert chat ID are your Telegram ID (get it from @userinfobot).</p>`;
+    const val=()=>({send_alert:$("#ea_on").checked,alert_token:$("#ea_tok").value.trim(),alert_chat:$("#ea_chat").value.trim(),owner_ids:$("#ea_own").value,show_owner:$("#ea_so").checked,show_user:$("#ea_su").checked,user_msg:$("#ea_msg").value});
+    const te=trackDirty($("#ea_save"),val,$("#ea"));
+    $("#ea_save").onclick=async()=>{try{await api("/api/error_alerts","PUT",val());toast("Saved");vMore()}catch(x){toast(x.message)}};
+    $("#ea_test").onclick=async()=>{try{if(te&&$("#ea_save").classList.contains("dirty"))await api("/api/error_alerts","PUT",val());$("#ea_st").textContent="Sending…";await api("/api/error_alerts/test","POST");$("#ea_st").textContent="Test alert sent. Check your alert chat.";toast("Test alert sent")}catch(x){$("#ea_st").textContent=x.message;toast(x.message)}}});
   $("#rf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#rn2").textContent=f.name;if(!confirm("Restore from this backup? Commands of matching bots are replaced (the old ones go to the recycle bin)."))return;
     try{const r=await api("/api/restore","POST",{content_b64:await b64(f)});toast(`${r.created} added, ${r.updated} updated${r.skipped?`, ${r.skipped} skipped (no token)`:""}`);S.cmds=[];await loadBots()}catch(x){toast(x.message)}};
   $("#rub").onclick=async()=>{const u=$("#ru").value.trim();if(!u)return toast("Paste a backup link first.");if(!confirm("Restore from this link?"))return;
@@ -758,7 +808,10 @@ async function tManage(){const B=$("#body"),id=S.bot.id,ver=(await api(`/api/bot
     document.querySelectorAll(".erow .ic").forEach((b,i)=>b.onclick=()=>{env=read();env.splice(i,1);draw()})};
   draw();
   $("#er").onclick=()=>{env=read();raw=!raw;draw()};$("#av").onclick=()=>{env=read();env.push({k:"",v:"",raw:0});draw()};
-  $("#se").onclick=async()=>{try{await api(`/api/bots/${id}/env`,"PUT",{items:read()});env=await api(`/api/bots/${id}/env`);draw();toast("Saved. New values apply to the next message.")}catch(e){toast(e.message)}};
+  const te=trackDirty($("#se"),()=>read(),$("#se").closest(".card"));
+  $("#av").addEventListener("click",()=>te.update());$("#envb").addEventListener("click",()=>setTimeout(te.update,0));
+  $("#se").onclick=async()=>{try{await api(`/api/bots/${id}/env`,"PUT",{items:read()});env=await api(`/api/bots/${id}/env`);draw();te.reset();toast("Saved. New values apply to the next message.")}catch(e){toast(e.message)}};
+  trackDirty($("#uv"),()=>$("#nv").value.trim(),$("#nv").closest(".card"));
   $("#uv").onclick=async()=>{try{await api(`/api/bots/${id}/version`,"POST",{version:$("#nv").value});toast("Version updated");tManage()}catch(e){toast(e.message)}};
   $("#eu").onclick=()=>{location.href=`/api/bots/${id}/export_users?format=${document.querySelector("input[name=uf]:checked").value}&last_active=${$("#la").checked?1:0}&created=${$("#cd").checked?1:0}`};
   bindImportUsers(id);$("#dlb").onclick=deleteBot}
@@ -776,12 +829,12 @@ function vEditor(){
   try{const dr=localStorage.getItem('bb_draft_'+c.id);if(dr!==null&&dr!==c.code&&c.draft===c.code&&c.h===undefined){c.draft=dr;toast('Recovered your unsaved changes')}}catch{}
   c.h??=[c.draft];c.hi??=c.h.length-1;
   frame(`<div class="tabs">${S.open.map(id=>{const t=S.cmds.find(x=>x.id==id);return t?`<div class="tab ${id==S.cur?"":"off"}" data-id="${id}"><span class="py">PY</span><span>${esc(t.name)}</span><button class="x" data-x="${id}" aria-label="Close ${esc(t.name)}">×</button></div>`:""}).join("")}<button class="addtab" id="nt" aria-label="New command">${I.plus}</button></div>
-  <div class="subbar">${I.code}<span id="rn" title="Rename" style="cursor:pointer">${esc(c.name)}</span><button class="ic" id="cp" aria-label="Copy code">${I.copy}</button><button class="ic" id="fd" aria-label="Find">${I.search}</button><button class="ic" id="dp" aria-label="Duplicate command">${I.dup}</button><button class="ic" id="rt" aria-label="Run test">${I.wand}</button></div>
+  <div class="subbar">${I.code}<span id="rn" title="Rename" style="cursor:pointer">${esc(c.name)}</span><button class="ic" id="cp" aria-label="Copy code">${I.copy}</button><button class="ic" id="fd" aria-label="Find">${I.search}</button><button class="ic" id="rt" aria-label="Run test">${I.wand}</button></div>
   <div class="toolbar"><button class="tb" id="un" aria-label="Undo">${I.undo}</button><button class="tb" id="re" aria-label="Redo">${I.redo}</button><span class="sep"></span><button class="tb" id="cp2" aria-label="Copy">${I.copy}</button><button class="tb" id="ps" aria-label="Paste">${I.paste}</button><span class="grow"></span><button class="tb w" id="bk2">${I.arrow}Back</button><button class="tb w" id="sv">${I.save}Save</button></div>
-  <div class="ed"><div class="hl" id="hl"></div><textarea id="ta" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="Python code"></textarea></div>
+  <div class="ed"><div class="hl" id="hl"></div><textarea id="ta" placeholder="Write Python here…" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="Python code"></textarea></div>
   ${S.sheet?`<div class="sheet"><div class="row"><b class="grow">Test run</b><button class="btn ghost sm" id="sx">Close</button></div><pre>${S.sheet}</pre></div>`:""}`);
   const ta=$("#ta"),hl=$("#hl");ta.value=c.draft;
-  const paint=()=>{hl.innerHTML=hlAll(ta.value);ta.style.height="auto";ta.style.height=Math.max(ta.scrollHeight,innerHeight*.6)+"px";$("#un").disabled=c.hi<=0;$("#re").disabled=c.hi>=c.h.length-1;$("#sv").classList.toggle("dirty",ta.value!==c.code)};
+  const paint=()=>{hl.innerHTML=hlAll(ta.value);ta.style.height="auto";ta.style.height=Math.max(ta.scrollHeight,innerHeight*.6)+"px";$("#un").disabled=c.hi<=0;$("#re").disabled=c.hi>=c.h.length-1;const dd=ta.value!==c.code;$("#sv").classList.toggle("dirty",dd);$("#sv").disabled=!dd};
   let last=0;const push=()=>{c.draft=ta.value;if(c.h[c.hi]===ta.value)return;if(Date.now()-last<700&&c.hi>0&&c.hi==c.h.length-1)c.h[c.hi]=ta.value;else{c.h=c.h.slice(0,c.hi+1);c.h.push(ta.value);c.hi++}last=Date.now()};
   ta.oninput=()=>{push();paint();try{ta.value!==c.code?localStorage.setItem('bb_draft_'+c.id,ta.value):localStorage.removeItem('bb_draft_'+c.id)}catch{}};
   ta.onkeydown=e=>{const s=ta.selectionStart;
@@ -794,9 +847,8 @@ function vEditor(){
   $("#cp").onclick=copy;$("#cp2").onclick=copy;
   $("#ps").onclick=async()=>{try{const t=await navigator.clipboard.readText();ta.setRangeText(t,ta.selectionStart,ta.selectionEnd,"end");ta.oninput()}catch{toast("Paste isn't allowed in this browser")}};
   $("#fd").onclick=async()=>{const q=await ask("Find in code","","Text to find","Find");if(!q)return;const i=ta.value.indexOf(q);if(i<0)return toast("Not found");ta.focus();ta.setSelectionRange(i,i+q.length)};
-  async function save(){try{const r=await api(`/api/commands/${c.id}`,"PUT",{name:c.name,code:ta.value});c.code=r.code;c.draft=r.code;try{localStorage.removeItem("bb_draft_"+c.id)}catch{}$("#sv")?.classList.remove("dirty");toast("Saved")}catch(e){toast(e.message)}}
-  $("#sv").onclick=save;
-  $("#dp").onclick=async()=>{for(let i=1;i<=6;i++){try{const nm=`${c.name} copy${i>1?" "+i:""}`;const n=await api(`/api/bots/${S.bot.id}/commands`,"POST",{name:nm,code:ta.value,folder:c.folder});S.cmds=await api(`/api/bots/${S.bot.id}/commands`);toast(`Duplicated as ${n.name}`);return openCmd(n.id)}catch(e){if(!/already exists/.test(e.message))return toast(e.message)}}};$("#bk2").onclick=()=>{S.cur=null;S.sheet=null;render()};
+  async function save(){if(ta.value===c.code)return toast("No changes to save");try{const r=await api(`/api/commands/${c.id}`,"PUT",{name:c.name,code:ta.value});c.code=r.code;c.draft=r.code;try{localStorage.removeItem("bb_draft_"+c.id)}catch{}$("#sv")&&($("#sv").classList.remove("dirty"),$("#sv").disabled=true);toast("Saved")}catch(e){toast(e.message)}}
+  $("#sv").onclick=save;$("#bk2").onclick=()=>{S.cur=null;S.sheet=null;render()};
   $("#nt").onclick=newCmd;
   $("#rn").onclick=async()=>{const n=await ask("Rename command","This is the text users send.","name","Rename",c.name);if(!n||n==c.name)return;try{const r=await api(`/api/commands/${c.id}`,"PUT",{name:n,code:ta.value});c.name=r.name;c.code=c.draft=r.code;toast("Renamed");vEditor()}catch(e){toast(e.message)}};
   document.querySelectorAll(".tab").forEach(t=>t.onclick=e=>{if(e.target.dataset.x)return;S.cur=+t.dataset.id;S.sheet=null;render()});
@@ -834,23 +886,22 @@ function kvView(el,scope){const id=S.bot.id;api(`/api/bots/${id}/kv?scope=${enco
 
 /* ---------- settings ---------- */
 function tSettings(){const b=S.bot,B=$("#body"),id=b.id,botId=b.token_hint?"":"";
-  B.innerHTML=`<div class="card"><h4>Bot ID</h4><div class="field"><input readonly id="bid" value="…"><button class="ic" id="cb" aria-label="Copy bot ID">${I.paste}</button></div></div>
+  B.innerHTML=`<div class="card"><h4>Bot ID <span class="mut">· used as bot_id and in Account.* functions</span></h4><div class="field"><input readonly id="bid" value="${id}"><button class="ic" id="cb" aria-label="Copy bot ID">${I.paste}</button></div></div>
   <div class="card"><h4>Bot token</h4><div class="field mono"><input readonly id="tk" value="${"•".repeat(30)}"><button class="ic" id="ct" aria-label="Copy token">${I.paste}</button><button class="ic" id="et" aria-label="Show token">${I.eye}</button></div></div>
   <div class="card"><div class="row"><div class="grow"><h4>Auto-translate (92 languages)</h4><p style="margin:0">Messages are translated and delivered in each user's own language. Users can pick their language via libs.translate.setLang.</p></div><button class="toggle" id="tr" aria-label="Auto-translate"></button></div></div>
   <div class="card"><h4>Update token</h4><div class="act"><div class="field"><input id="nt2" placeholder="New token" autocomplete="off"></div><button class="btn dim" id="ut">Update</button></div></div>
-  <div class="card"><h4>Transfer bot</h4><div class="act"><div class="field"><input id="em" placeholder="Recipient email"></div><button class="btn dim" id="tf">Transfer</button></div></div>
   <div class="card"><h4>Clone bot</h4><p>Duplicate this bot with all commands and settings.</p><button class="btn full" id="cl">Clone</button></div>${dangerCard()}
   <div class="card"><h4>Import users</h4><p>Upload a JSON, CSV or TXT with Telegram user IDs: our export or another platform's. Every ID is checked with Telegram through this bot and only users it can reach are added, about 10 a second, so a big list takes hours. You can leave this page.</p><div class="file"><label class="btn">Choose file<input type="file" id="uf" accept=".json,.csv,.txt"></label><span id="un2">No file chosen</span></div></div>
   <div class="card"><h4>Export bot</h4><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="ef" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><label class="chk"><input type="checkbox" id="eo">Commands Only</label><label class="chk"><input type="checkbox" id="ed">Include Bot Data</label><button class="btn full" id="ex">${I.down} Export</button></div>
   <div class="card"><h4>Import commands</h4><p>Upload or paste an exported bot file (JSON / YAML / TXT). Existing commands are updated, new ones added — ideal for editing your bot with AI, then re-uploading.</p><div class="radios">${["json","yaml","txt"].map((f,i)=>`<label><input type="radio" name="if" value="${f}" ${i?"":"checked"}>${f.toUpperCase()}</label>`).join("")}</div><div class="file"><label class="btn">Choose file<input type="file" id="cf" accept=".json,.yaml,.yml,.txt"></label><span id="cn">No file chosen</span></div><textarea class="paste" id="cx" placeholder="…or paste your exported commands here"></textarea><label class="chk"><input type="checkbox" id="rp">Replace all existing commands</label><button class="btn full" id="im">${I.up} Import</button></div>`;
-  api(`/api/bots/${id}/token`).then(r=>{S.tokV=r.token;if($("#bid"))$("#bid").value=r.token.split(":")[0]});
+  api(`/api/bots/${id}/token`).then(r=>{S.tokV=r.token});
   api(`/api/bots/${id}/translate`).then(r=>$("#tr")&&$("#tr").classList.toggle("on",r.translate));
   const clip=async t=>{try{await navigator.clipboard.writeText(t);toast("Copied")}catch{toast("Copy isn't allowed in this browser")}};
   $("#cb").onclick=()=>clip($("#bid").value);$("#ct").onclick=()=>clip(S.tokV||"");
   $("#et").onclick=()=>{const on=$("#tk").value.startsWith("•");$("#tk").value=on?S.tokV:"•".repeat(30);$("#et").innerHTML=on?I.eyeoff:I.eye};
   $("#tr").onclick=async e=>{const on=!e.currentTarget.classList.contains("on");e.currentTarget.classList.toggle("on",on);await api(`/api/bots/${id}/settings`,"POST",{translate:on});toast(on?"Auto-translate saved as on":"Auto-translate saved as off")};
+  trackDirty($("#ut"),()=>$("#nt2").value.trim(),$("#nt2").closest(".card"));
   $("#ut").onclick=async()=>{try{await api(`/api/bots/${id}/token`,"POST",{token:$("#nt2").value});toast("Token updated");$("#nt2").value="";tSettings()}catch(e){toast(e.message)}};
-  $("#tf").onclick=async()=>{try{await api(`/api/bots/${id}/transfer`,"POST",{email:$("#em").value})}catch(e){toast(e.message)}};
   $("#dlb").onclick=deleteBot;
   $("#cl").onclick=async()=>{const t=await ask("Clone bot","Paste the token of the new bot that will receive a copy of everything.","123456:ABC-DEF…","Clone");if(!t)return;try{await api(`/api/bots/${id}/clone`,"POST",{token:t});toast("Bot cloned");await loadBots()}catch(e){toast(e.message)}};
   $("#uf").onchange=async e=>{const f=e.target.files[0];if(!f)return;$("#un2").textContent=f.name;try{const r=await api(`/api/bots/${id}/import_users`,"POST",{content:await f.text()});toast(`Checking ${r.count} user IDs in the background`)}catch(x){toast(x.message)}};

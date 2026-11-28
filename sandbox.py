@@ -44,6 +44,15 @@ class D(dict):
         return _wrap(dict.__getitem__(self, k))
 
 
+class BcResult(D):
+    """What Bot.broadcast returns. Usable as a dict, and as a name or key (it stands for its broadcast_id)."""
+    def __str__(self):
+        return str(self.get("broadcast_id"))
+
+    def __hash__(self):
+        return hash(self.get("broadcast_id"))
+
+
 def bunchify(x):
     return _wrap(x)
 
@@ -253,6 +262,18 @@ def _api_url(url):
     return TG_BASE + u[len("https://api.telegram.org"):] if u.startswith("https://api.telegram.org") else u
 
 
+class _Resp(requests.Response):
+    pass
+
+
+def _fake_response(url, body, status=200, headers=None):
+    r = _Resp()
+    r.status_code, r.url = status, url
+    r._content = body.encode("utf-8") if isinstance(body, str) else body
+    r.headers.update({"Content-Type": "application/json", **(headers or {})})
+    return r
+
+
 class _HTTP:
     def get(self, url, **kw):
         kw.setdefault("timeout", 8)
@@ -324,49 +345,65 @@ def run_job(p):
     # ----- storage (live, shared with the panel) -----
     MISSING = object()
 
-    def kv_get(scope, key):
-        if (scope, key) in overlay:
-            v = overlay[(scope, key)]
+    def kv_get(scope, key, bid=None):
+        bid = BID if bid is None else bid
+        if (bid, scope, key) in overlay:
+            v = overlay[(bid, scope, key)]
             return MISSING if v is MISSING else v
-        r = db().execute("SELECT v FROM kv WHERE bot_id=? AND scope=? AND k=?", (BID, scope, key)).fetchone()
+        r = db().execute("SELECT v FROM kv WHERE bot_id=? AND scope=? AND k=?", (bid, scope, key)).fetchone()
         return json.loads(r["v"]) if r else MISSING
 
-    def kv_set(scope, key, value):
+    def kv_set(scope, key, value, bid=None):
+        bid = BID if bid is None else bid
         if DRY:
-            overlay[(scope, key)] = value
+            overlay[(bid, scope, key)] = value
             return
         db().execute("INSERT OR REPLACE INTO kv(bot_id,scope,k,v) VALUES(?,?,?,?)",
-                     (BID, scope, key, json.dumps(value, default=str)))
+                     (bid, scope, key, json.dumps(value, default=str)))
 
-    def kv_del(scope, key):
+    def kv_del(scope, key, bid=None):
+        bid = BID if bid is None else bid
         if DRY:
-            overlay[(scope, key)] = MISSING
+            overlay[(bid, scope, key)] = MISSING
             return
-        db().execute("DELETE FROM kv WHERE bot_id=? AND scope=? AND k=?", (BID, scope, key))
+        db().execute("DELETE FROM kv WHERE bot_id=? AND scope=? AND k=?", (bid, scope, key))
 
-    def kv_all(scope):
-        out = {r["k"]: json.loads(r["v"]) for r in db().execute("SELECT k,v FROM kv WHERE bot_id=? AND scope=?", (BID, scope))}
-        for (s, k), v in overlay.items():
-            if s == scope:
+    def kv_all(scope, bid=None):
+        bid = BID if bid is None else bid
+        out = {r["k"]: json.loads(r["v"]) for r in db().execute("SELECT k,v FROM kv WHERE bot_id=? AND scope=?", (bid, scope))}
+        for (b_, s_, k), v in overlay.items():
+            if b_ == bid and s_ == scope:
                 out.pop(k, None) if v is MISSING else out.__setitem__(k, v)
         return out
 
     class Store:
-        def __init__(self, scope):
-            self._scope = scope
+        def __init__(self, scope, bid=None):
+            self._scope, self._bid = scope, bid
 
         def get(self, key, default=None):
-            v = kv_get(self._scope, key)
+            v = kv_get(self._scope, str(key), self._bid)
             return default if v is MISSING else v
 
         def save(self, key, value):
-            kv_set(self._scope, key, value)
+            kv_set(self._scope, str(key), value, self._bid)
 
         def delete(self, key):
-            kv_del(self._scope, key)
+            kv_del(self._scope, str(key), self._bid)
 
         def all(self):
-            return kv_all(self._scope)
+            return kv_all(self._scope, self._bid)
+
+    def _tbid(bot_id):
+        """bot_id= on Bot/User/Resources calls: any bot of this panel (api_key is not needed here)."""
+        if bot_id in (None, ""):
+            return BID
+        try:
+            t = int(str(bot_id).strip())
+        except ValueError:
+            raise ValueError(f"{bot_id!r} is not a bot ID")
+        if t != BID and not db().execute("SELECT 1 FROM bots WHERE id=?", (t,)).fetchone():
+            raise ValueError(f"Bot {bot_id} was not found in this panel")
+        return t
 
     def cross_bot(bot_id, api_key):
         if bot_id or api_key:
@@ -697,16 +734,34 @@ def run_job(p):
         return f"{p['base_url'].rstrip('/')}/hook/{BID}?c={quote(str(command), safe='')}&u={uid}&s={sig}"
 
     def broadcast(function=None, command=None, callback_url=None, **kw):
-        for k in ("mode", "bot_ids", "speed", "code", "api_key", "bot_id", "warnings"):
+        """Send a Telegram call (or run a command) for every user of this bot, or of another bot of the panel
+        (bot_id=… or bot_ids=[…]). The callback_url command runs in the bot that started the broadcast."""
+        bot_ids, single, speed = kw.pop("bot_ids", None), kw.pop("bot_id", None), kw.pop("speed", None)
+        mode, code = kw.pop("mode", None), kw.pop("code", None)
+        for k in ("api_key", "warnings"):
             kw.pop(k, None)
-        if not (function or command):
-            return {"status": "error", "message": "function or command is required"}
-        jid = uuid.uuid4().hex[:12]
-        if not DRY:
-            db().execute("INSERT INTO bcjobs(id,bot_id,ts,function,command,kwargs,callback_url,status,total,sent,failed) "
-                         "VALUES(?,?,?,?,?,?,?,'queued',0,0,0)", (jid, BID, time.time(), function, command,
-                                                                 json.dumps(_plain(kw), default=str), callback_url))
-        return {"status": "success", "broadcast_id": jid}
+        if not (function or command or code):
+            return {"status": "error", "message": "function, command or code is required"}
+        if mode == "all":
+            targets = [r["id"] for r in db().execute("SELECT id FROM bots")]
+        else:
+            targets = list(bot_ids) if bot_ids else ([single] if single else [BID])
+        ids = []
+        for t in targets:
+            try:
+                t = int(str(t))
+            except ValueError:
+                return {"status": "error", "message": f"{t!r} is not a bot ID"}
+            if not db().execute("SELECT 1 FROM bots WHERE id=?", (t,)).fetchone():
+                return {"status": "error", "message": f"Bot {t} was not found in this panel"}
+            jid = uuid.uuid4().hex[:12]
+            ids.append(jid)
+            if not DRY:
+                db().execute("INSERT INTO bcjobs(id,bot_id,ts,function,command,kwargs,callback_url,status,total,sent,failed,speed,owner_bot,code) "
+                             "VALUES(?,?,?,?,?,?,?,'queued',0,0,0,?,?,?)", (jid, t, time.time(), function, command,
+                                                                          json.dumps(_plain(kw), default=str), callback_url,
+                                                                          float(speed) if speed else None, BID, code))
+        return BcResult({"status": "success", "broadcast_id": ids[0], "broadcast_ids": ids})
 
     botstore = Store("bot")
     userstore = Store(f"user:{UID}")
@@ -727,8 +782,8 @@ def run_job(p):
             db().execute("INSERT INTO ctl(bot_id, action) VALUES(?,?)", (bot_id or BID, action))
         return {"ok": True}
 
-    def _bcs(jid):
-        r = db().execute("SELECT * FROM bcjobs WHERE id=? AND bot_id=?", (jid, BID)).fetchone()
+    def _bcs(jid, bot_id=None, api_key=None):
+        r = db().execute("SELECT * FROM bcjobs WHERE id=?", (jid,)).fetchone()
         if not r:
             return None
         st = {"done": "completed"}.get(r["status"], r["status"])
@@ -742,7 +797,7 @@ def run_job(p):
     def _bc_set(jid, **cols):
         if not DRY:
             sets = ",".join(f"{k}=?" for k in cols)
-            db().execute(f"UPDATE bcjobs SET {sets} WHERE id=? AND bot_id=?", (*cols.values(), jid, BID))
+            db().execute(f"UPDATE bcjobs SET {sets} WHERE id=?", (*cols.values(), jid))
         return {"ok": True}
 
     nraw_ = lambda t: re.sub(r"\s+", " ", (t or "").strip())
@@ -821,7 +876,7 @@ def run_job(p):
             return getattr(bot, name)
 
     class BotHigh(metaclass=_BotMeta):
-        setData = staticmethod(lambda name, data, **k: (botstore.save(name, data), {"ok": True})[1])
+        setData = staticmethod(lambda name, data, bot_id=None, **k: (Store("bot", _tbid(bot_id)).save(name, data), {"ok": True})[1])
         log = staticmethod(lambda *t: db().execute("INSERT INTO logs(bot_id,ts,level,text) VALUES(?,?,?,?)",
                                                    (BID, time.time(), "print", " ".join(map(str, t))[:3000])) and None)
         getAllData = staticmethod(lambda output_format="json": _file("bot_data." + output_format, json.dumps(botstore.all(), indent=2, default=str, ensure_ascii=False)))
@@ -836,13 +891,13 @@ def run_job(p):
         restoreCommand = staticmethod(lambda key: restore_command(BID, key))
         purgeCommand = staticmethod(lambda key=None: purge_command(BID, key))
         getBroadcastStatus = getBroadcastProgress = staticmethod(_bcs)
-        stopBroadcast = staticmethod(lambda jid: _bc_set(jid, status="stopped"))
-        pauseBroadcast = staticmethod(lambda jid: _bc_set(jid, status="paused"))
-        resumeBroadcast = staticmethod(lambda jid, speed=None: _bc_set(jid, status="running", **({"speed": speed} if speed else {})))
-        setBroadcastSpeed = staticmethod(lambda jid, speed: _bc_set(jid, speed=float(speed)))
-        rerunBroadcast = staticmethod(lambda jid, speed=None: _bc_set(jid, status="queued", sent=0, failed=0, **({"speed": speed} if speed else {})))
+        stopBroadcast = staticmethod(lambda jid, **k: _bc_set(jid, status="stopped"))
+        pauseBroadcast = staticmethod(lambda jid, **k: _bc_set(jid, status="paused"))
+        resumeBroadcast = staticmethod(lambda jid, speed=None, **k: _bc_set(jid, status="running", **({"speed": speed} if speed else {})))
+        setBroadcastSpeed = staticmethod(lambda jid, speed, **k: _bc_set(jid, speed=float(speed)))
+        rerunBroadcast = staticmethod(lambda jid, speed=None, **k: _bc_set(jid, status="queued", sent=0, failed=0, **({"speed": speed} if speed else {})))
         clearBroadcast = staticmethod(lambda jid=None: (db().execute("DELETE FROM bcjobs WHERE bot_id=?" + (" AND id=?" if jid else ""), (BID, jid) if jid else (BID,)), {"ok": True})[1])
-        listBroadcasts = staticmethod(lambda status=None, limit=20: [_bcs(r["id"]) for r in db().execute("SELECT id FROM bcjobs WHERE bot_id=? ORDER BY ts DESC LIMIT ?", (BID, int(limit))).fetchall() if status is None or _bcs(r["id"]).status == status])
+        listBroadcasts = staticmethod(lambda status=None, limit=20: [_bcs(r["id"]) for r in db().execute("SELECT id FROM bcjobs WHERE bot_id=? OR owner_bot=? ORDER BY ts DESC LIMIT ?", (BID, BID, int(limit))).fetchall() if status is None or _bcs(r["id"]).status == status])
         blockUser = staticmethod(lambda user_id: (db().execute("UPDATE users SET banned=1 WHERE bot_id=? AND user_id=?", (BID, user_id)), {"ok": True})[1])
         unblockUser = staticmethod(lambda user_id: (db().execute("UPDATE users SET banned=0 WHERE bot_id=? AND user_id=?", (BID, user_id)), {"ok": True})[1])
         getBlockedUsers = staticmethod(lambda: [r["user_id"] for r in _users(" AND banned=1")])
@@ -872,9 +927,9 @@ def run_job(p):
                       "active": {str(d): n("last_seen>=?", now - d * 86400) for d in frames},
                       "new": {str(d): n("first_seen>=?", now - d * 86400) for d in frames}})
 
-        getData = staticmethod(lambda name, bot_id=None, api_key=None: (cross_bot(bot_id, api_key), botstore.get(name))[1])
-        saveData = staticmethod(lambda name, data, bot_id=None, api_key=None: (cross_bot(bot_id, api_key), botstore.save(name, data), {"ok": True})[2])
-        deleteData = staticmethod(lambda name, bot_id=None: (botstore.delete(name), {"ok": True})[1])
+        getData = staticmethod(lambda name, bot_id=None, api_key=None: Store("bot", _tbid(bot_id)).get(name))
+        saveData = staticmethod(lambda name, data, bot_id=None, api_key=None: (Store("bot", _tbid(bot_id)).save(name, data), {"ok": True})[1])
+        deleteData = staticmethod(lambda name, bot_id=None, api_key=None: (Store("bot", _tbid(bot_id)).delete(name), {"ok": True})[1])
         handleNextCommand = staticmethod(wait_next)
         runCommand = staticmethod(_rc)
         runCommandAfter = staticmethod(_rca)
@@ -891,9 +946,10 @@ def run_job(p):
 
         @staticmethod
         def info(bot_id=None, api_key=None):
-            cross_bot(bot_id, api_key)
-            return D({"bot_id": str(BID), "id": BID, "name": BOT.get("name"), "username": BOT.get("username"),
-                      "status": "working", "token": TOKEN})
+            r = db().execute("SELECT * FROM bots WHERE id=?", (_tbid(bot_id),)).fetchone()
+            return D({"bot_id": str(r["id"]), "botid": str(r["id"]), "id": r["id"], "name": r["name"], "username": r["username"],
+                      "bot_username": r["username"], "bot_name": r["name"], "status": "working" if r["running"] else "stopped",
+                      "token": r["token"], "creation_date": ts_fmt(r["created_at"])})
 
         @staticmethod
         def sendMessage(*a, **k):
@@ -904,23 +960,21 @@ def run_job(p):
 
     class UserHigh:
         @staticmethod
-        def _s(user):
-            return Store(f"user:{user}") if user is not None else userstore
+        def _s(user, bot_id=None):
+            return Store(f"user:{user if user is not None else UID}", _tbid(bot_id))
 
         @staticmethod
         def getData(name, user=None, data_type=None, bot_id=None, api_key=None):
-            cross_bot(bot_id, api_key)
-            return UserHigh._s(user).get(name)
+            return UserHigh._s(user, bot_id).get(name)
 
         @staticmethod
         def saveData(name, data, user=None, data_type=None, bot_id=None, api_key=None):
-            cross_bot(bot_id, api_key)
-            UserHigh._s(user).save(name, data)
+            UserHigh._s(user, bot_id).save(name, data)
             return {"ok": True}
 
         @staticmethod
         def deleteData(name, user=None, data_type=None, bot_id=None, api_key=None):
-            UserHigh._s(user).delete(name)
+            UserHigh._s(user, bot_id).delete(name)
             return {"ok": True}
 
         @staticmethod
@@ -952,8 +1006,8 @@ def run_job(p):
                 Store(f"user:{user}").delete(k)
 
     class Res:
-        def __init__(self, scope, name):
-            self.s, self.k = Store(scope), "__res__" + name
+        def __init__(self, scope, name, bid=None):
+            self.s, self.k = Store(scope, bid), "__res__" + name
 
         def value(self):
             return self.s.get(self.k, 0)
@@ -975,46 +1029,281 @@ def run_job(p):
             self.s.save(self.k, 0)
 
     class Resources:
-        userRes = staticmethod(lambda name, user=None: Res(f"user:{user if user is not None else UID}", name))
-        anotherRes = staticmethod(lambda name, user=None: Res(f"user:{user if user is not None else UID}", name))
-        globalRes = staticmethod(lambda name: Res("bot", name))
+        userRes = staticmethod(lambda name, user=None, bot_id=None, api_key=None: Res(f"user:{user if user is not None else UID}", name, _tbid(bot_id)))
+        anotherRes = staticmethod(lambda name, user=None, bot_id=None, api_key=None: Res(f"user:{user if user is not None else UID}", name, _tbid(bot_id)))
+        globalRes = staticmethod(lambda name, bot_id=None, api_key=None: Res("bot", name, _tbid(bot_id)))
+        accountRes = staticmethod(lambda name: Res("account", name, 0))
 
     class Ads:
         """Rewarded ads are a Telebot Creator monetisation feature; here the reward is granted straight away."""
         reward_ad = staticmethod(lambda text=None, then=None, **k: True)
         claim = staticmethod(lambda *a, **k: True)
 
-    class Account:
-        """Telebot Creator account functions. Account data and starting/stopping panel bots work;
-        the rest only exist on the Telebot Creator platform."""
-        saveData = staticmethod(lambda name, data: (db().execute("INSERT OR REPLACE INTO kv(bot_id,scope,k,v) VALUES(0,'account',?,?)", (name, json.dumps(data, default=str))), {"ok": True})[1])
-        getData = staticmethod(lambda name: (lambda r: json.loads(r["v"]) if r else None)(db().execute("SELECT v FROM kv WHERE bot_id=0 AND scope='account' AND k=?", (name,)).fetchone()))
-        deleteData = staticmethod(lambda name: (db().execute("DELETE FROM kv WHERE bot_id=0 AND scope='account' AND k=?", (name,)), {"ok": True})[1])
-        start_bot = staticmethod(lambda botid: _ctl("start", int(botid)))
-        stop_bot = staticmethod(lambda botid: _ctl("stop", int(botid)))
-        restart_bot = staticmethod(lambda botid: _ctl("restart", int(botid)))
-        get_bot_status = staticmethod(lambda botid: "working" if (db().execute("SELECT running FROM bots WHERE id=?", (int(botid),)).fetchone() or {"running": 0})["running"] else "stopped")
-        get_bots_list = staticmethod(lambda: [D({"botid": r["id"], "name": r["name"], "username": r["username"], "status": "working" if r["running"] else "stopped"}) for r in db().execute("SELECT id,name,username,running FROM bots")])
-        gen_random_id = staticmethod(lambda: uuid.uuid4().hex[:16])
-        # --- recycle bins, addressed by bot id ---
-        delete_bot = staticmethod(lambda botid: _ctl("delete_bot", int(botid)))          # moves the bot to the recycle bin
-        restore_bot = staticmethod(lambda botid: _ctl("restore_bot", int(botid)))
-        purge_bot = staticmethod(lambda botid: _ctl("purge_bot", int(botid)))             # delete for good
-        get_deleted_bots = staticmethod(lambda: [D({"botid": r["id"], "name": r["name"], "username": r["username"],
-                                                     "deleted_at": r["deleted_at"], "commands": r["n_commands"], "users": r["n_users"]})
-                                                  for r in db().execute("SELECT id,name,username,deleted_at,n_commands,n_users FROM trash_bots ORDER BY deleted_at DESC")])
-        get_bot_commands = staticmethod(lambda botid: [r["name"] for r in db().execute("SELECT name FROM commands WHERE bot_id=? ORDER BY name", (int(botid),))])
-        get_deleted_commands = staticmethod(deleted_commands)
-        delete_command = staticmethod(_dc)
-        restore_command = staticmethod(_rc_cmd)
-        purge_command = staticmethod(_pc)
-        get_backup_url = staticmethod(backup_url)
-        send_backup = staticmethod(lambda: _ctl("backup_now"))                               # to the Telegram chat set in More → Backup
+    # ---- Account (same names and answers as Telebot Creator: {"ok": …, "result": …}) ----
+    def _okr(result=None, **extra):
+        return D({"ok": True, "result": result, **extra})
 
-        def __getattr__(self, name):
+    def _errr(msg):
+        return D({"ok": False, "result": str(msg), "message": str(msg)})
+
+    def _bid(x):
+        try:
+            return int(str(x).strip())
+        except Exception:
+            return None
+
+    def ctl_call(action, bot_id=None, args=None, timeout=8):
+        """Ask the panel to do something only it can (start a bot, clone one ...) and wait for the answer."""
+        if DRY:
+            return D({"ok": True, "result": "(test run: nothing was changed)"})
+        a_ = dict(args or {})
+        a_["_wait"] = True
+        rid = db().execute("INSERT INTO ctl(bot_id,action,args,done) VALUES(?,?,?,0)",
+                           (bot_id if bot_id is not None else BID, action, json.dumps(a_, default=str))).lastrowid
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            r = db().execute("SELECT done,result FROM ctl WHERE id=?", (rid,)).fetchone()
+            if r and r["done"]:
+                db().execute("DELETE FROM ctl WHERE id=?", (rid,))
+                return D(json.loads(r["result"]))
+            time.sleep(0.04)
+        return _errr("The panel did not answer in time")
+
+    ts_fmt = lambda t: time.strftime("%H:%M:%S %d:%m:%Y", time.gmtime(t or time.time()))
+
+    def _binfo(r):
+        return {"botid": str(r["id"]), "name": r["name"], "username": r["username"],
+                "status": "working" if r["running"] else "stopped", "creation_date": ts_fmt(r["created_at"]), "has_token": True}
+
+    def _bot_row(botid):
+        b_ = _bid(botid)
+        return db().execute("SELECT * FROM bots WHERE id=?", (b_,)).fetchone() if b_ is not None else None
+
+    def acc_bots_list():
+        return _okr([_binfo(r) for r in db().execute("SELECT * FROM bots ORDER BY id")])
+
+    def acc_bot_info(botid):
+        r = _bot_row(botid)
+        if not r:
+            return _errr("Bot not found")
+        d = _binfo(r)
+        d["command_count"] = db().execute("SELECT COUNT(*) c FROM commands WHERE bot_id=?", (r["id"],)).fetchone()["c"]
+        d["user_count"] = db().execute("SELECT COUNT(*) c FROM users WHERE bot_id=?", (r["id"],)).fetchone()["c"]
+        d["points_used"] = 0
+        return _okr(d)
+
+    def acc_bot_status(botid):
+        r = _bot_row(botid)
+        return _okr({"status": "working" if r["running"] else "stopped"}) if r else _errr("Bot not found")
+
+    def acc_get_bot_data(botid, name):
+        r = _bot_row(botid)
+        return _okr(Store("bot", r["id"]).get(name)) if r else _errr("Bot not found")
+
+    def acc_set_bot_data(botid, name, data):
+        r = _bot_row(botid)
+        if not r:
+            return _errr("Bot not found")
+        Store("bot", r["id"]).save(name, data)
+        return _okr("Data saved")
+
+    def acc_command_list(botid):
+        r = _bot_row(botid)
+        if not r:
+            return _errr("Bot not found")
+        return _okr([{"command": c_["name"], "code_length": len(c_["code"] or ""), "has_code": bool((c_["code"] or "").strip())}
+                     for c_ in db().execute("SELECT name, code FROM commands WHERE bot_id=? ORDER BY name", (r["id"],))])
+
+    def acc_command_info(botid, command):
+        c_ = _cmd_row(botid, command)
+        return _okr({"command": c_["name"], "code": c_["code"], "code_length": len(c_["code"] or "")}) if c_ else _errr("Command not found")
+
+    def acc_create_command(botid, command, code=""):
+        r = _bot_row(botid)
+        if not r:
+            return _errr("Bot not found")
+        if _cmd_row(botid, command):
+            return _errr("A command with that name already exists")
+        if not DRY:
+            db().execute("INSERT INTO commands(bot_id,name,code,updated_at) VALUES(?,?,?,?)", (r["id"], command, code, time.time()))
+            _ctl("reindex", r["id"])
+        return _okr("Command created")
+
+    def acc_edit_command(botid, command, code):
+        c_ = _cmd_row(botid, command)
+        if not c_:
+            return _errr("Command not found")
+        if not DRY:
+            db().execute("UPDATE commands SET code=?, updated_at=? WHERE id=?", (code, time.time(), c_["id"]))
+        return _okr("Command updated")
+
+    def acc_delete_command(botid, command):
+        r = delete_command(botid, command)
+        return _okr("Command moved to the recycle bin", name=r.get("name")) if r.get("ok") else _errr(r.get("error"))
+
+    def acc_restore_command(botid, key):
+        r = restore_command(botid, key)
+        return _okr("Command restored", name=r.get("name")) if r.get("ok") else _errr(r.get("error"))
+
+    def acc_purge_command(botid, key=None):
+        purge_command(botid, key)
+        return _okr("Removed for good")
+
+    def acc_deleted_commands(botid):
+        return _okr([{"id": d["id"], "command": d["name"], "name": d["name"], "deleted_at": d["deleted_at"], "lines": d["lines"]}
+                     for d in deleted_commands(botid)])
+
+    def acc_deleted_bots():
+        out = []
+        for r in db().execute("SELECT id,name,username,deleted_at,n_commands,n_users FROM trash_bots ORDER BY deleted_at DESC"):
+            left = max(0, int(p.get("trash_days", 30) - (time.time() - r["deleted_at"]) / 86400))
+            out.append({"botid": str(r["id"]), "name": r["name"], "username": r["username"], "deleted_at": ts_fmt(r["deleted_at"]),
+                        "commands_count": r["n_commands"], "users_count": r["n_users"], "days_remaining": left, "recoverable": True})
+        return _okr(out)
+
+    def acc_deleted_bots_stats():
+        rows_ = db().execute("SELECT COUNT(*) c, COALESCE(SUM(n_commands),0) n FROM trash_bots").fetchone()
+        return _okr({"total": rows_["c"], "total_commands": rows_["n"]})
+
+    def _read_import(x):
+        if not isinstance(x, (dict, list)) and hasattr(x, "read"):
+            x = x.read()
+        if isinstance(x, (bytes, bytearray)):
+            if x[:2] == b"\x1f\x8b":
+                import gzip
+                x = gzip.decompress(x)
+            x = x.decode("utf-8", "replace")
+        if isinstance(x, str):
+            t = x.strip()
+            if t[:1] in "{[":
+                data = json.loads(t)
+            else:                                         # "=== /name ===" plain text export
+                parts = re.split(r"(?m)^=== (.+?) ===$", t)
+                data = {"commands": [{"command": n.strip(), "code": c_.strip("\n") + "\n"} for n, c_ in zip(parts[1::2], parts[2::2])]}
+        else:
+            data = x
+        if isinstance(data, list):
+            data = {"commands": data}
+        out = dict(data)
+        out["commands"] = [{"command": c_.get("command") or c_.get("name"), "name": c_.get("name") or c_.get("command"),
+                            "code": c_.get("code", "")} for c_ in data.get("commands", [])]
+        return out
+
+    def acc_parse_import_data(import_file, file_format="json"):
+        try:
+            return D(_read_import(import_file))
+        except Exception as e:
+            return _errr(f"Could not read the import data: {e}")
+
+    def acc_import_commands(import_data, botid, remove_old_command=False, format="json"):
+        r = _bot_row(botid)
+        if not r:
+            return _errr("Bot not found")
+        try:
+            data = _read_import(import_data)
+        except Exception as e:
+            return _errr(f"Could not read the import data: {e}")
+        if DRY:
+            return _okr(f"Would import {len(data['commands'])} commands", command_count=len(data["commands"]))
+        if remove_old_command:
+            for c_ in db().execute("SELECT * FROM commands WHERE bot_id=?", (r["id"],)).fetchall():
+                db().execute("INSERT INTO trash_commands(bot_id,name,code,folder,deleted_at) VALUES(?,?,?,?,?)",
+                             (r["id"], c_["name"], c_["code"], c_["folder"], time.time()))
+                db().execute("DELETE FROM commands WHERE id=?", (c_["id"],))
+        n = 0
+        for c_ in data["commands"]:
+            if not c_["name"]:
+                continue
+            hit = _cmd_row(r["id"], c_["name"])
+            if hit and nraw_(hit["name"]) == nraw_(c_["name"]):
+                db().execute("UPDATE commands SET code=?, updated_at=? WHERE id=?", (c_["code"], time.time(), hit["id"]))
+            else:
+                db().execute("INSERT INTO commands(bot_id,name,code,updated_at) VALUES(?,?,?,?)", (r["id"], c_["name"], c_["code"], time.time()))
+            n += 1
+        _ctl("reindex", r["id"])
+        return _okr(f"Imported {n} commands", command_count=n, imported=n)
+
+    def acc_export_bot(botid, format="json", include_bot_data=False):
+        r = _bot_row(botid)
+        if not r:
+            return _errr("Bot not found")
+        doc = {"bot": {"name": r["name"], "username": r["username"], "version": r["version"] or "1.0.0"},
+               "commands": [{"command": c_["name"], "name": c_["name"], "code": c_["code"]}
+                            for c_ in db().execute("SELECT name, code FROM commands WHERE bot_id=? ORDER BY name", (r["id"],))],
+               "export_info": {"source": "Botbench", "exported_at": ts_fmt(time.time())}}
+        if include_bot_data:
+            doc["global_data"] = [{"name": k, "data": v} for k, v in kv_all("bot", r["id"]).items()]
+        return _file(f"{r['username']}_export.json", json.dumps(doc, indent=2, ensure_ascii=False, default=str))
+
+    def acc_clone_bot(botid, new_token=None):
+        return ctl_call("clone_bot", _bid(botid), {"token": new_token}) if _bot_row(botid) else _errr("Bot not found")
+
+    def acc_import_bot(import_data, new_token=None, format="json"):
+        try:
+            data = _read_import(import_data)
+        except Exception as e:
+            return _errr(f"Could not read the import data: {e}")
+        return ctl_call("import_bot", 0, {"token": new_token, "commands": data["commands"]})
+
+    class _AccMeta(type):
+        def __getattr__(cls, name):
+            if name.startswith("_"):
+                raise AttributeError(name)
+
             def na(*a, **k):
                 raise NotImplementedError(f"Account.{name}() is a Telebot Creator platform function and isn't available here.")
             return na
+
+    class Account(metaclass=_AccMeta):
+        """Telebot Creator's Account functions, working on the bots of this panel."""
+        # account data (shared by all bots)
+        saveData = staticmethod(lambda name, data: (Store("account", 0).save(name, data), _okr("Added new data", ok="true"))[1])
+        getData = staticmethod(lambda name=None: Store("account", 0).get(name) if name is not None else Store("account", 0).all())
+        deleteData = staticmethod(lambda name: (Store("account", 0).delete(name), _okr("deleted"))[1])
+        getAllData = staticmethod(lambda name=None, output_format="json": _file("account_data." + output_format, json.dumps(Store("account", 0).all(), indent=2, default=str, ensure_ascii=False)))
+        getDataFile = staticmethod(lambda name, output_format="txt": _file(f"{name}.{output_format}", (lambda v: v if isinstance(v, str) else json.dumps(v, default=str, ensure_ascii=False))(Store("account", 0).get(name))))
+        deleteAllData = staticmethod(lambda except_data=None, include_bot_data=False: ([Store("account", 0).delete(k) for k in list(Store("account", 0).all()) if k not in (except_data or [])], _okr("deleted"))[1])
+        info = staticmethod(lambda: D({"ok": True, "email": "owner@botbench", "plan": "Self-hosted", "points_left": 10 ** 9,
+                                      "result": {"email": "owner@botbench", "plan": "Self-hosted", "points_left": 10 ** 9}}))
+        # bots
+        get_bots_list = staticmethod(acc_bots_list)
+        get_bot_info = staticmethod(acc_bot_info)
+        get_bot_status = staticmethod(acc_bot_status)
+        get_bot_data = staticmethod(acc_get_bot_data)
+        set_bot_data = staticmethod(acc_set_bot_data)
+        start_bot = staticmethod(lambda botid: ctl_call("start", _bid(botid)))
+        stop_bot = staticmethod(lambda botid: ctl_call("stop", _bid(botid)))
+        restart_bot = staticmethod(lambda botid: ctl_call("restart", _bid(botid)))
+        create_bot = staticmethod(lambda bot_token, bot_name=None, bot_username=None, **k: ctl_call("create_bot", 0, {"token": bot_token, "name": bot_name, "username": bot_username}))
+        clone_bot = staticmethod(acc_clone_bot)
+        import_bot = staticmethod(acc_import_bot)
+        export_bot = staticmethod(acc_export_bot)
+        parse_import_data = staticmethod(acc_parse_import_data)
+        import_commands = staticmethod(acc_import_commands)
+        # recycle bins
+        delete_bot = staticmethod(lambda botid, permanent=False: ctl_call("delete_bot", _bid(botid), {"permanent": bool(permanent)}))
+        recover_bot = staticmethod(lambda botid, new_token=None: ctl_call("recover_bot", _bid(botid), {"new_token": new_token}))
+        permanent_delete_bot = staticmethod(lambda botid: ctl_call("permanent_delete_bot", _bid(botid)))
+        clear_expired_bots = staticmethod(lambda: ctl_call("clear_expired_bots", 0))
+        get_deleted_bots = staticmethod(acc_deleted_bots)
+        get_deleted_bots_stats = staticmethod(acc_deleted_bots_stats)
+        restore_bot = recover_bot
+        purge_bot = permanent_delete_bot
+        # commands
+        get_command_list = staticmethod(acc_command_list)
+        get_command_info = staticmethod(acc_command_info)
+        create_command = staticmethod(acc_create_command)
+        edit_command = staticmethod(acc_edit_command)
+        delete_command = staticmethod(acc_delete_command)
+        restore_command = staticmethod(acc_restore_command)
+        purge_command = staticmethod(acc_purge_command)
+        get_deleted_commands = staticmethod(acc_deleted_commands)
+        get_bot_commands = staticmethod(lambda botid: [c_["name"] for c_ in db().execute("SELECT name FROM commands WHERE bot_id=? ORDER BY name", (_bid(botid) or 0,))])
+        # helpers
+        gen_random_id = staticmethod(lambda: uuid.uuid4().hex[:16])
+        get_backup_url = staticmethod(backup_url)
+        send_backup = staticmethod(lambda: _ctl("backup_now"))
+        revoke_api = staticmethod(lambda: _errr("API keys are a Telebot Creator feature. Everything works without one here."))
 
     def MembershipCheck(chats, user):
         for c in (chats if isinstance(chats, (list, tuple)) else [chats]):
@@ -1026,8 +1315,43 @@ def run_job(p):
         return True
 
     bot = BotAPI()
+
+    class Api:
+        """Pages API: the command's HTTP answer when it was started by a webhook link."""
+        setWebhookResult = staticmethod(lambda obj: state.__setitem__("webhook_result", obj))
+        setResponse = setWebhookResult
     libs = _Namespace(DateAndTime=_DateAndTime(), Random=_Random(), Resources=Resources, tbcads=Ads,
                       Webhook=_Namespace(getUrlFor=staticmethod(webhook_url)))
+
+    def mcp_emulate(url, payload):
+        """Commands written for Telebot Creator call its MCP endpoint to replace a revoked bot token.
+        Here that request is answered by the panel itself."""
+        m_, rid = payload.get("method"), payload.get("id")
+        if m_ == "initialize":
+            body = {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}},
+                                                              "serverInfo": {"name": "botbench", "version": "1"}}}
+            return _fake_response(url, json.dumps(body), headers={"Mcp-Session-Id": uuid.uuid4().hex})
+        if m_ and m_.startswith("notifications/"):
+            return _fake_response(url, "", 202)
+        if m_ == "tools/call" and (payload.get("params") or {}).get("name") == "replace_bot_tokens":
+            toks = (payload["params"].get("arguments") or {}).get("tokens")
+            toks = toks if isinstance(toks, list) else [t for t in re.split(r"[\s,]+", str(toks or "")) if t]
+            outs, ok_all = [], bool(toks)
+            for t in toks:
+                r_ = ctl_call("replace_token", 0, {"token": t}, timeout=8)
+                ok_all = ok_all and bool(r_.get("ok"))
+                outs.append(r_.get("result") if r_.get("ok") else f"Error: {r_.get('result')}")
+            text = "\n".join(outs) or "Error: no token given"
+            body = {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": text}], "isError": not ok_all}}
+            return _fake_response(url, json.dumps(body, ensure_ascii=False))
+        body = {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "This Telebot Creator tool is not available in Botbench"}}
+        return _fake_response(url, json.dumps(body))
+
+    class _JobHTTP(_HTTP):
+        def post(self, url, **kw):
+            if str(url).startswith("https://api.telebotcreator.com/v2/mcp/"):
+                return mcp_emulate(str(url), kw.get("json") or {})
+            return super().post(url, **kw)
 
     def make_ns(options=None, params=None):
         msgobj = ctx["message"]
@@ -1043,8 +1367,8 @@ def run_job(p):
             "params": params if params is not None else (" ".join(ctx["args"]) if ctx.get("args") else "None"),
             "args": ctx["args"], "data": ctx.get("data"), "u": UID, "options": _opts(options),
             "update_type": ctx.get("update_type", "message"), "bot_id": str(BID), "bot_token": TOKEN,
-            "left_points": 10 ** 9, "wait_next": wait_next, "handleNextCommand": wait_next, "runCommand": runCommand,
-            "libs": libs, "HTTP": _HTTP(), "requests": requests, "Account": Account(), "MembershipCheck": MembershipCheck,
+            "left_points": 10 ** 9, "Api": Api, "callback_query": message if ctx.get("update_type") == "callback_query" else None, "wait_next": wait_next, "handleNextCommand": wait_next, "runCommand": runCommand,
+            "libs": libs, "HTTP": _JobHTTP(), "requests": requests, "Account": Account, "MembershipCheck": MembershipCheck,
             "ReturnCommand": ReturnCommand, "returncommand": ReturnCommand, "returnCommand": ReturnCommand,
             "bunchify": bunchify, "isNumeric": isNumeric, "md5": md5, "rawurlencode": rawurlencode,
             "encodeURIComponent": encodeURIComponent, "decodeURIComponent": decodeURIComponent, "parse_qs": parse_qs,
@@ -1091,8 +1415,17 @@ def run_job(p):
     # ----- run: gate -> command -> error handler -----
     buf, first_error = io.StringIO(), None
 
+    def short_msg(e, line):
+        if isinstance(e, SyntaxError):
+            return f"Syntax Error: {e.msg} (<unknown>, line {line or e.lineno})"
+        base = str(e) if isinstance(e, TelegramError) else f"{type(e).__name__}: {e}"
+        return base.strip()[:500] + (f" (line {line})" if line else "")
+
     def note(name, e, line):
-        errors.append({"command": name, "message": "".join(traceback.format_exception(type(e), e, e.__traceback__)).strip(), "line": line})
+        errors.append({"command": name, "line": line, "short": short_msg(e, line),
+                       "message": "".join(traceback.format_exception(type(e), e, e.__traceback__)).strip()})
+
+    handled = [False]
 
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         name, code = p["cmd"]["name"], p["cmd"]["code"]
@@ -1119,8 +1452,9 @@ def run_job(p):
                 state["in_error"] = True
                 try:
                     run_code("!", handler[1], options=str(e), params="None", preface=False)
+                    handled[0] = True
                 except ReturnCommand:
-                    pass
+                    handled[0] = True
                 except BaseException as e2:
                     note("!", e2, getattr(e2, "_cmd_info", (0, None))[1])
     if ctx.get("update_type") == "callback_query" and ctx.get("callback_query_id") and not state["answered"] and not DRY:
@@ -1130,7 +1464,7 @@ def run_job(p):
             pass
         state["answered"] = True
     first = errors[0] if errors else None
-    return {"answered": state["answered"], "actions": actions, "pending": state["pending"], "scheduled": state["scheduled"],
+    return {"answered": state["answered"], "handled": handled[0], "webhook_result": state.get("webhook_result"), "actions": actions, "pending": state["pending"], "scheduled": state["scheduled"],
             "stdout": buf.getvalue()[-4000:], "errors": errors,
             "error": first["message"] if first else None, "error_line": first["line"] if first else None}
 
@@ -1147,7 +1481,7 @@ def serve():
         except BaseException:
             tb = traceback.format_exc()
             res = {"actions": [], "pending": None, "scheduled": [], "stdout": "", "error_line": None, "error": tb,
-                   "errors": [{"command": "(runtime)", "message": tb, "line": None}]}
+                   "errors": [{"command": "(runtime)", "message": tb, "short": tb.strip().splitlines()[-1][:300], "line": None}]}
         proto_out.write(json.dumps(res, default=str) + "\n")
         proto_out.flush()
 

@@ -45,19 +45,9 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN blocked INTEGER DEFAULT 0",
     "ALTER TABLE bots ADD COLUMN translate INTEGER DEFAULT 0",
     "ALTER TABLE bots ADD COLUMN version TEXT DEFAULT '1.0.0'",
-    "ALTER TABLE commands ADD COLUMN folder TEXT", "ALTER TABLE commands ADD COLUMN updated_at REAL", "ALTER TABLE pending ADD COLUMN options TEXT", "ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0", "ALTER TABLE bcjobs ADD COLUMN speed REAL",
+    "ALTER TABLE commands ADD COLUMN folder TEXT", "ALTER TABLE bots ADD COLUMN created_at REAL", "ALTER TABLE ctl ADD COLUMN args TEXT", "ALTER TABLE ctl ADD COLUMN result TEXT", "ALTER TABLE ctl ADD COLUMN done INTEGER DEFAULT 0", "ALTER TABLE bcjobs ADD COLUMN owner_bot INTEGER", "ALTER TABLE bcjobs ADD COLUMN code TEXT", "ALTER TABLE commands ADD COLUMN updated_at REAL", "ALTER TABLE pending ADD COLUMN options TEXT", "ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0", "ALTER TABLE bcjobs ADD COLUMN speed REAL",
 ]
 
-DEFAULT_START = '''# Runs when someone sends /start (or just "start")
-name = user.first_name or "there"
-count = user.get("visits", 0) + 1
-user.save("visits", count)
-
-bot.send(
-    f"Hi {name}! You've started me {count} time(s).",
-    inline=[[("Say hello", "hello"), ("Ask me something", "ask")]],
-)
-'''
 
 # ---------- database: one shared connection, WAL, autocommit ----------
 _lock = threading.RLock()
@@ -91,6 +81,9 @@ def init_db():
         except sqlite3.OperationalError:
             pass
     run("CREATE INDEX IF NOT EXISTS idx_users_bot ON users(bot_id, last_seen)")
+    run("UPDATE bots SET created_at=? WHERE created_at IS NULL", (time.time(),))
+    run("CREATE TRIGGER IF NOT EXISTS bots_created AFTER INSERT ON bots WHEN NEW.created_at IS NULL "
+        "BEGIN UPDATE bots SET created_at=CAST(strftime('%s','now') AS REAL) WHERE id=NEW.id; END")
 
 
 # ---------- Telegram (keep-alive connection pool) ----------
@@ -337,6 +330,7 @@ def base_url():
 def execute(bot, cmd, ctx, dry=False, gate=False, options=None):
     job = {"cmd": {"name": cmd["name"], "code": cmd["code"]}, "ctx": ctx, "dry": dry, "gate": gate, "options": options,
            "db_path": DB_PATH, "token": bot["token"], "env": env_for(bot["id"]), "base_url": base_url(), "secret": secret(),
+           "trash_days": TRASH_DAYS,
            "bot": {"id": bot["id"], "username": bot.get("username"), "name": bot.get("name")}}
     w = _pool.get()
     try:
@@ -348,7 +342,7 @@ def execute(bot, cmd, ctx, dry=False, gate=False, options=None):
     except TimeoutError:
         w.close(); w = None
         msg = f"Stopped: the command ran longer than {EXEC_TIMEOUT} seconds."
-        return {**EMPTY, "error": msg, "errors": [{"command": cmd["name"], "message": msg, "line": None}]}
+        return {**EMPTY, "error": msg, "errors": [{"command": cmd["name"], "message": msg, "short": msg, "line": None}]}
     except Exception as e:
         if w:
             w.close()
@@ -429,8 +423,109 @@ def handle_update(bot, upd):
         return answer_cb()
     res = execute(bot, cmd, ctx, gate=True, options=options)
     apply_result(bot, res)
+    notify_errors(bot, res, ctx)
     if not res.get("answered"):        # worker crashed or timed out before answering the button
         answer_cb()
+
+
+ERR_DEFAULT = {"send_alert": True, "alert_token": "", "alert_chat": "", "owner_ids": [], "show_owner": True,
+               "show_user": True, "user_msg": "⚠️ There is some error. Please contact @Jenish_Dobariya1"}
+_SEEN = {}
+
+
+def err_cfg():
+    d = dict(ERR_DEFAULT)
+    try:
+        d.update(json.loads(get_setting("error_alerts") or "{}"))
+    except Exception:
+        pass
+    return d
+
+
+def set_err_cfg(cfg):
+    set_setting("error_alerts", json.dumps(cfg))
+
+
+def _h(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _noise(short):
+    s = (short or "").lower()
+    return any(w in s for w in ("blocked by the user", "user is deactivated", "chat not found", "bot was kicked", "bot can't initiate"))
+
+
+def _short_of(e):
+    s = e.get("short")
+    if s:
+        return s
+    lines = [x for x in str(e.get("message", "")).strip().splitlines() if x.strip()]
+    s = lines[-1] if lines else "Unknown error"
+    return s + (f" (line {e['line']})" if e.get("line") else "")
+
+
+def send_error_alert(cfg, bot, e, user=None):
+    """To the dedicated alert bot/chat, so one person sees the errors of every bot."""
+    short = _short_of(e)
+    tail = str(e.get("message", "")).strip()[-1800:]
+    who = f"\nUser: <code>{user['id']}</code>{' @' + _h(user['username']) if user.get('username') else ''}" if user else ""
+    text = (f"🚨 <b>Botbench error</b>\nBot: @{_h(bot.get('username'))} (id {bot['id']})\nCommand: <code>{_h(e.get('command') or '-')}</code>"
+            f"{' · line ' + str(e['line']) if e.get('line') else ''}{who}\nTime: {time.strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
+            f"<code>{_h(short[:700])}</code>" + (f"\n\n<pre>{_h(tail)}</pre>" if tail and tail != short else ""))
+    tg(cfg["alert_token"], "sendMessage", chat_id=str(cfg["alert_chat"]).strip(), text=text[:4000], parse_mode="HTML")
+
+
+def _alert_job(cfg, bot, e, user):
+    try:
+        send_error_alert(cfg, bot, e, user)
+        set_setting("error_alert_status", json.dumps({"ts": time.time(), "ok": True}))
+    except Exception as ex:
+        set_setting("error_alert_status", json.dumps({"ts": time.time(), "ok": False, "msg": str(ex)[:150]}))
+
+
+def _chat_job(bot, chat_id, text, html):
+    try:
+        tg(bot["token"], "sendMessage", chat_id=chat_id, text=text, **({"parse_mode": "HTML"} if html else {}))
+    except Exception:
+        pass
+
+
+def notify_errors(bot, res, ctx=None):
+    errs = res.get("errors") or []
+    if not errs:
+        return
+    cfg, now, e0 = err_cfg(), time.time(), errs[0]
+    short = _short_of(e0)
+    user = (ctx or {}).get("user")
+    if cfg["send_alert"] and cfg["alert_token"] and str(cfg["alert_chat"]).strip() and not _noise(short):
+        key = ("a", bot["id"], e0.get("command"), short[:120])
+        if now - _SEEN.get(key, 0) > 300:          # the same error is sent at most every 5 minutes
+            _SEEN[key] = now
+            BG.submit(_alert_job, cfg, bot, e0, user)
+    if ctx and (ctx.get("chat") or {}).get("type") == "private" and ctx.get("update_type") in ("message", "callback_query") \
+            and not _noise(short):
+        owners = {str(x) for x in cfg["owner_ids"]} | ({str(cfg["alert_chat"]).strip()} if cfg["alert_chat"] else set())
+        uid = str(user["id"])
+        key = ("c", bot["id"], uid, e0.get("command"))
+        if now - _SEEN.get(key, 0) < 20:
+            return
+        if uid in owners and cfg["show_owner"]:
+            _SEEN[key] = now
+            BG.submit(_chat_job, bot, ctx["chat"]["id"],
+                      f"<b>Botbench Error:</b>\n{_h(short)}\n\nCommand: <code>{_h(e0.get('command') or '-')}</code>", True)
+        elif uid not in owners and cfg["show_user"] and not res.get("handled") and cfg["user_msg"].strip():
+            _SEEN[key] = now
+            BG.submit(_chat_job, bot, ctx["chat"]["id"], cfg["user_msg"], False)
+
+
+def run_code_for_user(bot, code, uid, options=None):
+    """Bot.broadcast(code=…): run a code string once for one user."""
+    u = one("SELECT user_id id, first_name, username FROM users WHERE bot_id=? AND user_id=?", (bot["id"], uid)) or {"id": uid}
+    chat = {"id": uid, "type": "private"}
+    ctx = make_ctx("broadcast", {"message_id": 0, "from": u, "chat": chat, "text": ""}, u, chat, "", [], None, None, 0)
+    res = execute(bot, {"name": "(broadcast code)", "code": code}, ctx, options=options)
+    apply_result(bot, res)
+    return res
 
 
 def fire_hook(bot, command, uid, options=None, user_json=None):
@@ -443,8 +538,10 @@ def fire_hook(bot, command, uid, options=None, user_json=None):
         "SELECT user_id id, first_name, username FROM users WHERE bot_id=? AND user_id=?", (bot["id"], uid)) or {"id": uid}
     chat = {"id": uid, "type": "private"}
     msg = {"message_id": 0, "from": u, "chat": chat, "text": ""}
-    res = execute(bot, cmd, make_ctx("webhook", msg, u, chat, "", args, None, None, 0), options=options)
+    ctx = make_ctx("webhook", msg, u, chat, "", args, None, None, 0)
+    res = execute(bot, cmd, ctx, options=options)
     apply_result(bot, res)
+    notify_errors(bot, res, ctx)
     return res
 
 
@@ -455,6 +552,7 @@ BOT_TABLES = ("commands", "kv", "pending", "users", "logs", "errors", "env", "fo
 def bot_snapshot(b, with_data=True, with_token=True):
     bid = b["id"]
     snap = {"id": bid, "name": b["name"], "username": b["username"], "version": b.get("version") or "1.0.0",
+            "created_at": b.get("created_at"),
             "was_running": bool(b["running"]),
             "commands": [{"name": c["name"], "code": c["code"], "folder": c["folder"]} for c in
                          rows("SELECT name, code, folder FROM commands WHERE bot_id=? ORDER BY name", (bid,))],
@@ -480,6 +578,8 @@ def backup_doc(with_data=True, with_token=True):
 
 def restore_snapshot(bid, s):
     """Write a snapshot into bot `bid`. Commands it replaces go to the recycle bin first."""
+    if s.get("created_at"):
+        run("UPDATE bots SET created_at=? WHERE id=?", (s["created_at"], bid))
     old = [r["id"] for r in rows("SELECT id FROM commands WHERE bot_id=?", (bid,))]
     if old:
         trash_commands(bid, old)
@@ -593,11 +693,14 @@ def trash_bot(bot_id):
     return True
 
 
-def restore_trashed_bot(bot_id):
+def restore_trashed_bot(bot_id, new_token=None):
     t = one("SELECT * FROM trash_bots WHERE id=?", (bot_id,))
     if not t:
         raise ValueError("That bot is not in the recycle bin.")
     snap = json.loads(t["snapshot"])
+    if new_token:
+        tg(new_token, "getMe")
+        snap["token"] = new_token.strip()
     other = one("SELECT id, username FROM bots WHERE token=?", (snap.get("token"),))
     if other:
         raise ValueError(f"Bot @{other['username']} (id {other['id']}) in the panel already uses this token.")
@@ -614,6 +717,63 @@ def restore_trashed_bot(bot_id):
     if bid != bot_id:
         run("UPDATE trash_commands SET bot_id=? WHERE bot_id=?", (bid, bot_id))
     return bid
+
+
+def create_bot(token, name=None, username=None):
+    token = (token or "").strip()
+    other = one("SELECT id, username FROM bots WHERE token=?", (token,))
+    if other:
+        raise ValueError(f"That token is already used by bot @{other['username']} (id {other['id']}).")
+    me = tg(token, "getMe")                      # raises with Telegram's own message for a bad token
+    return run("INSERT INTO bots(name, username, token) VALUES(?,?,?)",
+               (name or me.get("first_name"), username or me.get("username"), token))
+
+
+def clone_bot(template_id, token):
+    t = one("SELECT * FROM bots WHERE id=?", (template_id,))
+    if not t:
+        raise ValueError("The bot to clone was not found.")
+    bid = create_bot(token)
+    now = time.time()
+    for cm in rows("SELECT name, code, folder FROM commands WHERE bot_id=?", (template_id,)):
+        run("INSERT OR REPLACE INTO commands(bot_id,name,code,folder,updated_at) VALUES(?,?,?,?,?)",
+            (bid, cm["name"], cm["code"], cm["folder"], now))
+    for f in rows("SELECT name FROM folders WHERE bot_id=?", (template_id,)):
+        run("INSERT OR IGNORE INTO folders(bot_id,name) VALUES(?,?)", (bid, f["name"]))
+    for e in rows("SELECT k, v, raw FROM env WHERE bot_id=?", (template_id,)):
+        run("INSERT OR REPLACE INTO env(bot_id,k,v,raw) VALUES(?,?,?,?)", (bid, e["k"], e["v"], e["raw"]))
+    mini = one("SELECT html FROM miniapps WHERE bot_id=?", (template_id,))
+    if mini:
+        run("INSERT OR REPLACE INTO miniapps(bot_id, html) VALUES(?,?)", (bid, mini["html"]))
+    invalidate(bid)
+    start_bot(bid)
+    return bid
+
+
+def import_bot(commands, token):
+    bid = create_bot(token)
+    now = time.time()
+    for cm in commands:
+        run("INSERT OR REPLACE INTO commands(bot_id,name,code,updated_at) VALUES(?,?,?,?)", (bid, cm["name"], cm.get("code", ""), now))
+    invalidate(bid)
+    start_bot(bid)
+    return bid
+
+
+def replace_token(new_token):
+    """Give an existing bot a new token (after @BotFather revoked the old one). The bot is found by its Telegram ID."""
+    new_token = (new_token or "").strip()
+    me = tg(new_token, "getMe")
+    row = one("SELECT * FROM bots WHERE token LIKE ?", (new_token.split(":")[0] + ":%",))
+    if not row:
+        raise ValueError("No bot with that Telegram ID is in this panel.")
+    was = is_running(row["id"])
+    stop_bot(row["id"])
+    run("UPDATE bots SET token=?, name=?, username=? WHERE id=?", (new_token, me.get("first_name"), me.get("username"), row["id"]))
+    if was:
+        time.sleep(0.3)
+        start_bot(row["id"])
+    return row["id"], me.get("username")
 
 
 def purge_trashed_bot(bot_id):
@@ -696,28 +856,83 @@ BG = ThreadPoolExecutor(max_workers=8)
 
 
 def _control():
-    for r in rows("SELECT * FROM ctl ORDER BY id LIMIT 20"):
-        run("DELETE FROM ctl WHERE id=?", (r["id"],))
-        act, bid = r["action"], r["bot_id"]
+    """Requests from commands (Account.start_bot, delete_bot, clone_bot ...). A request with _wait gets its answer
+    written to the row, which the command is polling; others are fire-and-forget."""
+    for r in rows("SELECT * FROM ctl WHERE COALESCE(done,0)=0 ORDER BY id LIMIT 20"):
         try:
-            if act in ("stop", "restart"):
-                stop_bot(bid)
-            if act in ("start", "restart"):
+            args = json.loads(r.get("args") or "{}")
+        except Exception:
+            args = {}
+        act, bid = r["action"], r["bot_id"]
+        res = {"ok": True, "result": "done"}
+        try:
+            known = one("SELECT 1 FROM bots WHERE id=?", (bid,))
+            if act in ("start", "stop", "restart"):
+                if not known:
+                    raise ValueError("Bot not found")
+                if act in ("stop", "restart"):
+                    stop_bot(bid)
                 if act == "restart":
                     time.sleep(0.4)
-                start_bot(bid)
-            if act == "delete_bot":
-                trash_bot(bid)
-            elif act == "restore_bot":
-                restore_trashed_bot(bid)
-            elif act == "purge_bot":
+                if act in ("start", "restart"):
+                    start_bot(bid)
+                res["result"] = {"start": "Bot started successfully", "stop": "Bot stopped successfully",
+                                 "restart": "Bot restarted successfully"}[act]
+            elif act == "delete_bot":
+                if args.get("permanent"):
+                    if known:
+                        trash_bot(bid)
+                    purge_trashed_bot(bid)
+                elif not trash_bot(bid):
+                    raise ValueError("Bot not found")
+                res["result"] = "Bot deleted successfully"
+            elif act == "recover_bot":
+                res.update(result="Bot recovered successfully", botid=str(restore_trashed_bot(bid, args.get("new_token"))))
+            elif act == "permanent_delete_bot":
                 purge_trashed_bot(bid)
+                res["result"] = "Bot permanently deleted"
+            elif act == "clear_expired_bots":
+                n = one("SELECT COUNT(*) c FROM trash_bots WHERE deleted_at<?", (time.time() - TRASH_DAYS * 86400,))["c"]
+                cleanup_trash()
+                res["result"] = f"Removed {n} expired bot(s)"
+            elif act == "create_bot":
+                nb = create_bot(args.get("token"), args.get("name"), args.get("username"))
+                start_bot(nb)
+                res.update(result="Bot created successfully", botid=str(nb))
+            elif act == "clone_bot":
+                if not args.get("token"):
+                    raise ValueError("A bot token is required to clone a bot here.")
+                nb = clone_bot(bid, args["token"])
+                res.update(result="Bot cloned successfully", botid=str(nb))
+            elif act == "import_bot":
+                if not args.get("token"):
+                    raise ValueError("A bot token is required to import a bot here.")
+                nb = import_bot(args.get("commands") or [], args["token"])
+                res.update(result="Bot imported successfully", botid=str(nb))
+            elif act == "replace_token":
+                nb, un = replace_token(args.get("token"))
+                res.update(result=f"Replaced 1 token(s): new token saved for @{un}", botid=str(nb), username=un)
             elif act == "reindex":
                 invalidate(bid)
             elif act == "backup_now":
                 run_auto_backup()
         except Exception as e:
-            log(bid, "error", f"{act} failed: {e}")
+            res = {"ok": False, "result": str(e), "message": str(e)}
+            log(bid or 0, "error", f"{act} failed: {e}")
+        if args.get("_wait"):
+            run("UPDATE ctl SET done=1, result=? WHERE id=?", (json.dumps(res), r["id"]))
+        else:
+            run("DELETE FROM ctl WHERE id=?", (r["id"],))
+    run("DELETE FROM ctl WHERE COALESCE(done,0)=1 AND id<(SELECT COALESCE(MAX(id),0)-200 FROM ctl)")
+
+
+def _control_loop():
+    while True:
+        time.sleep(0.15)
+        try:
+            _control()
+        except Exception:
+            pass
 
 
 def _scheduler():
@@ -726,7 +941,6 @@ def _scheduler():
         time.sleep(1)
         n += 1
         try:
-            _control()
             if n % 60 == 0:
                 _autobackup_tick()
             if n % 3600 == 30:
@@ -751,6 +965,9 @@ def _camel(n):
 def _run_broadcast(job):
     from urllib.parse import urlparse, parse_qs
     bot = one("SELECT * FROM bots WHERE id=?", (job["bot_id"],))
+    if not bot:
+        run("UPDATE bcjobs SET status='stopped' WHERE id=?", (job["id"],))
+        return
     kw = json.loads(job["kwargs"] or "{}")
     users = [r["user_id"] for r in rows("SELECT user_id FROM users WHERE bot_id=? AND COALESCE(blocked,0)=0", (bot["id"],))]
     run("UPDATE bcjobs SET total=? WHERE id=?", (len(users), job["id"]))
@@ -767,7 +984,11 @@ def _run_broadcast(job):
                 break
             delay = 1.0 / max(1.0, st["speed"] or 20.0)
         try:
-            if job["function"]:
+            if job.get("code") and not job["function"]:
+                res_ = run_code_for_user(bot, job["code"], uid, kw or None)
+                if res_.get("errors"):
+                    raise RuntimeError(_short_of(res_["errors"][0]))
+            elif job["function"]:
                 fn = _camel(job["function"])
                 from sandbox import fix_html
                 kw = {k: (fix_html(v) if k in ("text", "caption") and isinstance(v, str) and kw.get("parse_mode", "HTML") == "HTML" else v)
@@ -788,8 +1009,9 @@ def _run_broadcast(job):
     run("UPDATE bcjobs SET sent=?, failed=?, status=? WHERE id=?", (ok, bad, "stopped" if stopped else "done", job["id"]))
     if job.get("callback_url") and not stopped:
         q = parse_qs(urlparse(job["callback_url"]).query)
+        owner = one("SELECT * FROM bots WHERE id=?", (job.get("owner_bot") or job["bot_id"],)) or bot
         if q.get("c") and q.get("u"):
-            fire_hook(bot, q["c"][0], int(q["u"][0]), {"json": {
+            fire_hook(owner, q["c"][0], int(q["u"][0]), {"json": {
                 "status": "completed", "broadcast_id": job["id"], "total": len(users),
                 "total_success": ok, "total_errors": bad}, "method": "POST"})
 
@@ -881,7 +1103,7 @@ def stop_bot(bot_id):
 def autostart():
     if not _bg_started:
         _bg_started.append(1)
-        for fn in (warm_up, _scheduler, _bc_loop):
+        for fn in (warm_up, _scheduler, _bc_loop, _control_loop):
             threading.Thread(target=fn, daemon=True).start()
     for b in rows("SELECT id FROM bots WHERE running=1"):
         start_bot(b["id"])
